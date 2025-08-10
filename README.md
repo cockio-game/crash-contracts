@@ -17,7 +17,6 @@ A single-player gambling game where players attempt to progress through 10 steps
 - currentGameId: Counter for unique game IDs  
 - games: Mapping of game data by ID
 - FEE_PERCENTAGE: Platform fee (5%)
-- SURVIVAL_BP: Array of survival rates in basis points for each step
 
 #### Core Functions
 
@@ -73,7 +72,6 @@ A competitive PvP variant where two players with matched wagers compete. Both pl
 - matches: Mapping of match data by ID
 - playerActiveMatch: Tracks active match per player
 - FEE_PERCENTAGE: Platform fee (5%)
-- SURVIVAL_BP: Same survival rates as single-player
 
 #### Match States
 solidity
@@ -102,7 +100,6 @@ enum MatchStatus {
 **settleMatch(bytes32 _matchId, address _winner, uint256 _stepsA, uint256 _stepsB)**
 - Only callable by authorized game server
 - Determines winner and calculates payout
-- Handles draws (both players get refund minus fee)
 - Updates match status to Completed
 
 **claimReward(bytes32 _matchId)**
@@ -124,7 +121,6 @@ enum MatchStatus {
 4. **State Machine**: Strict state transitions prevent invalid operations
 5. **Claim Validation**: Multiple checks ensure only winner can claim
 6. **Reentrancy**: CEI pattern in all payment functions
-7. **Draw Handling**: Fair refund mechanism for tied games
 
 ### PvP Game Flow
 1. Player A creates match with wager
@@ -135,7 +131,6 @@ enum MatchStatus {
 
 ### Fee Structure
 - 5% platform fee on all payouts
-- In draws: 5% fee still deducted, players get 95% refund
 - Winner receives: (wagerA + wagerB) * 0.95
 
 ---
