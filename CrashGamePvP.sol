@@ -61,7 +61,6 @@ contract CrashGamePvP is ReentrancyGuard {
     event MatchReady(bytes32 indexed matchId, address indexed playerA, address indexed playerB);
     event MatchSettled(bytes32 indexed matchId, address indexed winner, uint256 payout);
     event MatchRefunded(bytes32 indexed matchId, address indexed player, uint256 amount);
-    event MatchDraw(bytes32 indexed matchId, uint256 refundAmount);
     event MatchCanceled(bytes32 indexed matchId, address playerA, address playerB);
     event FeePercentUpdated(uint256 oldFee, uint256 newFee);
     event Withdrawn(address indexed user, bytes32 indexed matchId, uint256 amount);
@@ -163,7 +162,7 @@ contract CrashGamePvP is ReentrancyGuard {
     /**
      * @dev Oracle settles the match
      * @param matchId Match to settle
-     * @param winner Winner address (0x0 for draw)
+     * @param winner Winner address (must be one of the two players)
      */
     function settleMatch(
         bytes32 matchId,
@@ -173,10 +172,10 @@ contract CrashGamePvP is ReentrancyGuard {
         require(matchData.status == MatchStatus.Active, "Match not active");
         require(
             winner == matchData.playerA || 
-            winner == matchData.playerB || 
-            winner == address(0),
+            winner == matchData.playerB,
             "Invalid winner"
         );
+        require(winner != address(0), "Winner cannot be zero address");
 
         matchData.status = MatchStatus.Settled;
         
@@ -188,22 +187,10 @@ contract CrashGamePvP is ReentrancyGuard {
         _removeActiveMatch(matchData.playerA, matchId);
         _removeActiveMatch(matchData.playerB, matchId);
         
-        if (winner == address(0)) {
-            // Draw - split pot minus fee
-            uint256 refundAmount = netPot / 2;
-            uint256 remainder = netPot % 2; // Handle odd amounts
-            
-            // Credit refunds (pull-payment pattern)
-            claimable[matchId][matchData.playerA] += refundAmount + remainder;
-            claimable[matchId][matchData.playerB] += refundAmount;
-            
-            emit MatchDraw(matchId, refundAmount);
-        } else {
-            // Credit winner payout
-            claimable[matchId][winner] += netPot;
-            
-            emit MatchSettled(matchId, winner, netPot);
-        }
+        // Credit winner payout (no draws allowed)
+        claimable[matchId][winner] += netPot;
+        
+        emit MatchSettled(matchId, winner, netPot);
         
         // Credit fee to owner
         if (fee > 0) {
