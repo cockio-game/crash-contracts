@@ -59,7 +59,6 @@ contract CrashGamePvP is ReentrancyGuard {
     event MatchReady(bytes32 indexed matchId, address indexed playerA, address indexed playerB);
     event MatchSettled(bytes32 indexed matchId, address indexed winner, uint256 payout);
     event MatchRefunded(bytes32 indexed matchId, address indexed player, uint256 amount);
-    // Removed: MatchDraw event - no draws allowed anymore
     event MatchCanceled(bytes32 indexed matchId, address playerA, address playerB);
     event FeePercentUpdated(uint256 oldFee, uint256 newFee);
     event Withdrawn(address indexed user, bytes32 indexed matchId, uint256 amount);
