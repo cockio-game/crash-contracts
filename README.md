@@ -8,53 +8,66 @@ This document provides technical documentation for the Crash Game smart contract
 ## Contract: CrashSteps.sol
 
 ### Purpose
-A single-player gambling game where players attempt to progress through 10 steps, with each step having decreasing survival probability. Players can cash out at any time or risk continuing for higher rewards.
+A provably fair crash gambling game where players deposit ETH and attempt to cash out before "crashing". Uses EIP-712 signatures for oracle-verified payouts.
 
 ### Key Components
 
 #### State Variables
-- owner: Contract owner address
-- currentGameId: Counter for unique game IDs  
-- games: Mapping of game data by ID
-- FEE_PERCENTAGE: Platform fee (5%)
+- oracle: Address authorized to sign claim receipts
+- platformFeeBp: Platform fee in basis points (default 500 = 5%)
+- referralFeeBp: Referral fee in basis points (default 50 = 0.5%)
+- minDeposit: Minimum wager (0.001 ETH)
+- maxDeposit: Maximum wager (0.125 ETH)
+- maxPayoutFactorBp: Maximum payout multiplier (default 220000 = 22x)
+- totalLiability: Total potential payouts owed
+- nonce: Per-player counter for unique game IDs
+- netStakes: Mapping of player stakes by nonce
+- referrerOf: Tracks referral relationships
 
 #### Core Functions
 
-**startGame(uint256 _steps)**
-- Creates new game with specified target steps
-- Accepts ETH wager via msg.value
-- Validates steps (1-10) and minimum bet (0.0001 ETH)
-- Emits GameStarted event
+**deposit(address referrer)**
+- Player deposits ETH to start a round
+- Accepts referrer address for referral program
+- Validates deposit within min/max limits
+- Calculates payout cap based on net stake
+- Ensures sufficient bankroll for potential payout
+- Emits Deposited event with player, amount, nonce, cap
 
-**claim(uint256 _gameId)**
-- Allows player to cash out at current position
-- Calculates payout based on steps completed
-- Applies 5% platform fee
-- Transfers winnings to player
-- Emits GameClaimed event
+**claim(uint256 n, uint256 reward, bytes sig)**
+- Claims winnings with oracle-signed receipt
+- Verifies EIP-712 signature from oracle
+- Validates reward doesn't exceed calculated cap
+- Transfers reward to player
+- Emits Claimed event
 
-**emergencyClaim(uint256 _gameId)**
-- Fallback claim mechanism if regular claim fails
-- Same payout logic as claim()
-- Additional safety mechanism
+**forfeit(address player, uint256 n)**
+- Cancels an outstanding ticket
+- Can be called by player, oracle, or anyone after FORFEIT_DELAY (1 day)
+- Releases liability from totalLiability
+- Emits Forfeited event
 
-**getPayoutForStep(uint256 _step, uint256 _wager)**
-- Pure function calculating potential payout
-- Uses exponential multiplier formula
-- Returns payout after fee deduction
+**withdrawReferralBalance()**
+- Allows referrers to withdraw accumulated referral fees
+- Uses pull payment pattern for failed push payments
+
+**calculateCap(uint256 netStake)**
+- Pure function calculating maximum payout for a stake
+- Returns (netStake * maxPayoutFactorBp) / 10000
 
 ### Security Considerations
 
-1. **Reentrancy Protection**: Uses checks-effects-interactions pattern
-2. **Integer Overflow**: Solidity 0.8+ automatic overflow protection
-3. **Access Control**: Only game creator can claim their game
-4. **Minimum Bet**: Prevents dust attacks (0.0001 ETH minimum)
-5. **Game State Validation**: Prevents double-claiming via isClaimed flag
+1. **EIP-712 Signatures**: Oracle signs typed data for claim verification
+2. **Reentrancy Guard**: All payment functions use nonReentrant modifier
+3. **Pausable**: Owner can pause deposits and claims in emergency
+4. **Bankroll Protection**: Ensures contract has funds for all liabilities
+5. **Pull Payment Fallback**: Referral fees use pull pattern if push fails
+6. **Nonce System**: Prevents replay attacks and double-claiming
 
-### Payout Formula
-multiplier = 10000 / SURVIVAL_BP[step]
-scaledMultiplier = multiplier^numberOfSteps
-payout = (wager * scaledMultiplier) - fee
+### Oracle System
+- Oracle signs receipts containing (player, nonce, reward)
+- Signature verified using EIP-712 typed data hashing
+- Oracle can rotate via rotateOracle() owner function
 
 
 ---
@@ -74,14 +87,10 @@ A competitive PvP variant where two players with matched wagers compete. Both pl
 - FEE_PERCENTAGE: Platform fee (5%)
 
 #### Match States
-solidity
-enum MatchStatus {
-    Created,    // Match created, waiting for player B
-    Deposited,  // Both players deposited, ready to play
-    Active,     // Game in progress
-    Completed   // Game finished, winner determined
-}
-
+Created,    // Match created, waiting for player B
+Deposited,  // Both players deposited, ready to play
+Active,     // Game in progress
+Completed   // Game finished, winner determined
 
 #### Core Functions
 
@@ -124,7 +133,7 @@ enum MatchStatus {
 
 ### PvP Game Flow
 1. Player A creates match with wager
-2. Player B joins with matching wager  
+2. Player B joins with matching wager
 3. Off-chain game server manages gameplay
 4. Server calls settleMatch() with results
 5. Winner calls claimReward() to collect pot
