@@ -9,8 +9,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 contract CrashGamePvP is ReentrancyGuard {
 
     // --- Constants ---
-    uint256 public constant SETTLEMENT_TIMEOUT = 1 hours;
-    uint256 public constant AWAITING_TIMEOUT = 24 hours; // Timeout for awaiting-opponent matches
     uint256 public constant MAX_FEE_PERCENT = 10; // Maximum 10% fee to protect players
 
     // --- Types ---
@@ -19,7 +17,7 @@ contract CrashGamePvP is ReentrancyGuard {
         AwaitingOpponent, // 1: First player committed, waiting for second
         Active,         // 2: Both players committed, game active
         Settled,        // 3: Game settled by oracle
-        Refunded       // 4: Refunded due to timeout
+        Refunded       // 4: Refunded
     }
 
     struct Match {
@@ -61,11 +59,11 @@ contract CrashGamePvP is ReentrancyGuard {
     event MatchReady(bytes32 indexed matchId, address indexed playerA, address indexed playerB);
     event MatchSettled(bytes32 indexed matchId, address indexed winner, uint256 payout);
     event MatchRefunded(bytes32 indexed matchId, address indexed player, uint256 amount);
+    // Removed: MatchDraw event - no draws allowed anymore
     event MatchCanceled(bytes32 indexed matchId, address playerA, address playerB);
     event FeePercentUpdated(uint256 oldFee, uint256 newFee);
     event Withdrawn(address indexed user, bytes32 indexed matchId, uint256 amount);
     event FeeWithdrawn(address indexed to, uint256 amount);
-    event MatchTimedOut(bytes32 indexed matchId);
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
 
     // --- Modifiers ---
@@ -170,12 +168,12 @@ contract CrashGamePvP is ReentrancyGuard {
     ) external onlyOracle nonReentrant {
         Match storage matchData = matches[matchId];
         require(matchData.status == MatchStatus.Active, "Match not active");
+        require(winner != address(0), "Winner cannot be zero address");
         require(
             winner == matchData.playerA || 
             winner == matchData.playerB,
             "Invalid winner"
         );
-        require(winner != address(0), "Winner cannot be zero address");
 
         matchData.status = MatchStatus.Settled;
         
@@ -224,7 +222,7 @@ contract CrashGamePvP is ReentrancyGuard {
     }
 
     /**
-     * @dev Oracle can cancel match only pre-start or after timeout
+     * @dev Oracle can cancel match only for awaiting-opponent matches
      * @param matchId Match to cancel
      */
     function cancelMatch(
@@ -232,41 +230,21 @@ contract CrashGamePvP is ReentrancyGuard {
     ) external onlyOracle nonReentrant {
         Match storage matchData = matches[matchId];
         
-        // Oracle can only cancel:
-        // 1. Awaiting-opponent matches (pre-start)
-        // 2. Active matches that have timed out
+        // Oracle can only cancel awaiting-opponent matches
         require(
-            matchData.status == MatchStatus.AwaitingOpponent || 
-            (matchData.status == MatchStatus.Active && 
-             block.timestamp >= matchData.activeAt + SETTLEMENT_TIMEOUT),
-            "Oracle cancel only pre-start or after timeout"
+            matchData.status == MatchStatus.AwaitingOpponent,
+            "Can only cancel awaiting matches"
         );
         
-        // Store original status before changing it
-        bool isAwaitingOpponent = matchData.status == MatchStatus.AwaitingOpponent;
         matchData.status = MatchStatus.Refunded;
         
         // Remove from active matches
         _removeActiveMatch(matchData.playerA, matchId);
-        if (matchData.playerB != address(0)) {
-            _removeActiveMatch(matchData.playerB, matchId);
-        }
         
-        // Active matches already removed above
+        // Refund playerA's deposit
+        claimable[matchId][matchData.playerA] += matchData.totalDeposit;
         
-        // Refund based on match state
-        if (isAwaitingOpponent || matchData.playerB == address(0)) {
-            // Only playerA deposited
-            claimable[matchId][matchData.playerA] += matchData.totalDeposit;
-            
-            emit MatchCanceled(matchId, matchData.playerA, address(0));
-        } else {
-            // Both players deposited - refund each their wager
-            claimable[matchId][matchData.playerA] += matchData.wagerAmount;
-            claimable[matchId][matchData.playerB] += matchData.wagerAmount;
-            
-            emit MatchCanceled(matchId, matchData.playerA, matchData.playerB);
-        }
+        emit MatchCanceled(matchId, matchData.playerA, address(0));
     }
 
     /**
@@ -336,23 +314,8 @@ contract CrashGamePvP is ReentrancyGuard {
     /**
      * @dev Get match status for frontend
      */
-    function getMatchState(bytes32 matchId) external view returns (
-        MatchStatus status,
-        uint256 timeRemaining
-    ) {
-        Match memory m = matches[matchId];
-        
-        if (m.status == MatchStatus.AwaitingOpponent) {
-            // Show time until awaiting timeout
-            uint256 expiry = m.createdAt + AWAITING_TIMEOUT;
-            timeRemaining = expiry > block.timestamp ? expiry - block.timestamp : 0;
-        } else if (m.status == MatchStatus.Active) {
-            // Show time until settlement timeout
-            uint256 expiry = m.activeAt + SETTLEMENT_TIMEOUT;
-            timeRemaining = expiry > block.timestamp ? expiry - block.timestamp : 0;
-        }
-        
-        return (m.status, timeRemaining);
+    function getMatchState(bytes32 matchId) external view returns (MatchStatus status) {
+        return matches[matchId].status;
     }
     
     // --- Owner Functions ---
@@ -405,67 +368,6 @@ contract CrashGamePvP is ReentrancyGuard {
         emit FeeWithdrawn(to, amount);
     }
     
-    /**
-     * @dev Timeout a match that hasn't been settled within SETTLEMENT_TIMEOUT
-     * @param matchId The match to timeout
-     */
-    function timeoutMatch(bytes32 matchId) external nonReentrant {
-        Match storage matchData = matches[matchId];
-        require(matchData.status == MatchStatus.Active, "Match not active");
-        require(
-            block.timestamp >= matchData.activeAt + SETTLEMENT_TIMEOUT,
-            "Timeout not reached"
-        );
-        
-        matchData.status = MatchStatus.Settled;
-        
-        uint256 totalPot = matchData.totalDeposit;
-        uint256 fee = (totalPot * matchData.feeAtCreate) / 100;
-        uint256 netPot = totalPot - fee;
-        uint256 refundAmount = netPot / 2;
-        uint256 remainder = netPot % 2;
-        
-        // Clear player active matches
-        _removeActiveMatch(matchData.playerA, matchId);
-        _removeActiveMatch(matchData.playerB, matchId);
-        
-        // Credit refunds as a draw (pull-payment pattern)
-        claimable[matchId][matchData.playerA] += refundAmount + remainder;
-        claimable[matchId][matchData.playerB] += refundAmount;
-        
-        // Credit fee to owner
-        if (fee > 0) {
-            feeClaimable[owner] += fee;
-        }
-        
-        emit MatchTimedOut(matchId);
-        emit MatchDraw(matchId, refundAmount);
-    }
-    
-    /**
-     * @dev Timeout an awaiting-opponent match after AWAITING_TIMEOUT
-     * @param matchId The match to timeout
-     */
-    function timeoutAwaitingMatch(bytes32 matchId) external nonReentrant {
-        Match storage matchData = matches[matchId];
-        require(matchData.status == MatchStatus.AwaitingOpponent, "Not awaiting opponent");
-        require(
-            block.timestamp >= matchData.createdAt + AWAITING_TIMEOUT,
-            "Timeout not reached"
-        );
-        
-        matchData.status = MatchStatus.Refunded;
-        
-        // Clear player active matches
-        _removeActiveMatch(matchData.playerA, matchId);
-        
-        // Credit refund (pull-payment pattern)
-        claimable[matchId][matchData.playerA] += matchData.wagerAmount;
-        
-        emit MatchTimedOut(matchId);
-        emit MatchRefunded(matchId, matchData.playerA, matchData.wagerAmount);
-    }
-
     /**
      * @dev Owner sets the oracle directly.
      * Emits OracleUpdated(oldOracle, newOracle).
