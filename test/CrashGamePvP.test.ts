@@ -20,12 +20,49 @@ describe("CrashGamePvP", function () {
     await escrow.waitForDeployment();
   });
 
+  // Helper to produce per-user, time-boxed EIP-712 bet approvals
+  async function signApprovalFor(
+    player: string,
+    amount: bigint,
+    ttlSeconds = 3600n
+  ): Promise<{ sig: string; deadline: bigint }> {
+    const domain = {
+      name: "CrashGamePvP",
+      version: "1",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: await escrow.getAddress(),
+    } as const;
+    const types = {
+      BetApproval: [
+        { name: "player", type: "address" },
+        { name: "version", type: "uint256" },
+        { name: "amount", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    } as const;
+    const now = await time.latest();
+    const deadline = BigInt(now) + ttlSeconds;
+    const value = {
+      player,
+      version: 1n,
+      amount,
+      deadline,
+    } as const;
+    const sig = await oracle.signTypedData(domain, types, value);
+    return { sig, deadline };
+  }
+
   describe("Match Creation", function () {
     it("Should create a new match and return matchId", async function () {
       const wagerAmount = ethers.parseEther("1");
       
+      // Prepare EIP-712 approval signature from oracle (per-player + deadline)
+      const { sig, deadline } = await signApprovalFor(player1.address, wagerAmount);
+
       // Create match and get matchId from transaction
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount });
       const receipt = await tx.wait();
       
       // Get matchId from MatchCreated event
@@ -57,7 +94,10 @@ describe("CrashGamePvP", function () {
       const wagerAmount = ethers.parseEther("1");
       
       // Create first match
-      const tx1 = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig: sig1, deadline: dl1 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx1 = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl1, sig1, { value: wagerAmount });
       const receipt1 = await tx1.wait();
       const event1 = receipt1?.logs.find(log => {
         try {
@@ -73,7 +113,10 @@ describe("CrashGamePvP", function () {
       })?.args[0] as bigint;
       
       // Create second match
-      const tx2 = await escrow.connect(player2).createMatch({ value: wagerAmount });
+      const { sig: sig2, deadline: dl2 } = await signApprovalFor(player2.address, wagerAmount);
+      const tx2 = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl2, sig2, { value: wagerAmount });
       const receipt2 = await tx2.wait();
       const event2 = receipt2?.logs.find(log => {
         try {
@@ -95,11 +138,16 @@ describe("CrashGamePvP", function () {
       const wagerAmount = ethers.parseEther("1");
       
       // Create first match
-      await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig: sig3, deadline: dl3 } = await signApprovalFor(player1.address, wagerAmount);
+      await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl3, sig3, { value: wagerAmount });
       
       // Try to create second match
       await expect(
-        escrow.connect(player1).createMatch({ value: wagerAmount })
+        escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl3, sig3, { value: wagerAmount })
       ).to.be.revertedWith("Already in active match");
     });
   });
@@ -111,7 +159,10 @@ describe("CrashGamePvP", function () {
     beforeEach(async function () {
       wagerAmount = ethers.parseEther("1");
       // Create a match first
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig: sig4, deadline: dl4 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl4, sig4, { value: wagerAmount });
       const receipt = await tx.wait();
       const event = receipt?.logs.find(log => {
         try {
@@ -128,10 +179,11 @@ describe("CrashGamePvP", function () {
     });
 
     it("Should allow another player to join the match", async function () {
-      await escrow.connect(player2).joinMatch(
+      await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](
         matchId,
         player1.address,
         wagerAmount,
+        ethers.ZeroAddress,
         { value: wagerAmount }
       );
       
@@ -143,10 +195,11 @@ describe("CrashGamePvP", function () {
 
     it("Should prevent player from joining their own match", async function () {
       await expect(
-        escrow.connect(player1).joinMatch(
+        escrow.connect(player1)["joinMatch(uint256,address,uint256,address)"](
           matchId,
           player1.address,
           wagerAmount,
+          ethers.ZeroAddress,
           { value: wagerAmount }
         )
       ).to.be.revertedWith("Cannot play yourself");
@@ -156,10 +209,11 @@ describe("CrashGamePvP", function () {
       const wrongAmount = ethers.parseEther("0.5");
       
       await expect(
-        escrow.connect(player2).joinMatch(
+        escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](
           matchId,
           player1.address,
           wagerAmount,
+          ethers.ZeroAddress,
           { value: wrongAmount }
         )
       ).to.be.revertedWith("Wrong wager amount");
@@ -173,7 +227,10 @@ describe("CrashGamePvP", function () {
     beforeEach(async function () {
       wagerAmount = ethers.parseEther("1");
       // Create and join a match
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig: sig5, deadline: dl5 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl5, sig5, { value: wagerAmount });
       const receipt = await tx.wait();
       const event = receipt?.logs.find(log => {
         try {
@@ -188,10 +245,11 @@ describe("CrashGamePvP", function () {
         data: event!.data 
       })?.args[0] as bigint;
       
-      await escrow.connect(player2).joinMatch(
+      await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](
         matchId,
         player1.address,
         wagerAmount,
+        ethers.ZeroAddress,
         { value: wagerAmount }
       );
     });
@@ -250,7 +308,11 @@ describe("CrashGamePvP", function () {
 
     beforeEach(async function () {
       wagerAmount = ethers.parseEther("1");
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig, deadline } = await signApprovalFor(player1.address, wagerAmount);
+
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount });
       const receipt = await tx.wait();
       const event = receipt?.logs.find(log => {
         try {
@@ -307,8 +369,9 @@ describe("CrashGamePvP", function () {
         value: wagerAmount 
       });
       
-      // Create match from reverting contract using the overloaded function
-      await revertingContract["createMatch(address,uint256)"](await escrow.getAddress(), wagerAmount);
+      // Create match from reverting contract using EIP-712 approved bet-size
+      const { sig: sigR, deadline: dlR } = await signApprovalFor(await revertingContract.getAddress(), wagerAmount);
+      await revertingContract["createMatch(address,bytes,uint256,uint256)"](await escrow.getAddress(), sigR, dlR, wagerAmount);
       
       // Get the match ID from events
       const filter = escrow.filters.MatchCreated();
@@ -342,8 +405,11 @@ describe("CrashGamePvP", function () {
         // the settlement can still proceed using the pull-payment pattern.
         // The key is that settlement succeeds even if winner would revert on ETH transfer.
         
-        // Create match with player1
-        const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+        // Create match with player1 (EIP-712 approval per user)
+        const { sig: sigA, deadline: dlA } = await signApprovalFor(player1.address, wagerAmount);
+        const tx = await escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlA, sigA, { value: wagerAmount });
         const receipt = await tx.wait();
         const event = receipt?.logs.find(log => {
           try {
@@ -359,7 +425,7 @@ describe("CrashGamePvP", function () {
         })?.args[0] as bigint;
         
         // Player2 joins normally
-        await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
+        await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, { value: wagerAmount });
         
         // Oracle settles with player1 as winner
         // Even if player1 was a reverting contract, this would not revert
@@ -381,8 +447,11 @@ describe("CrashGamePvP", function () {
         
         const wagerAmount = ethers.parseEther("1");
         
-        // Create and join match
-        const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+        // Create and join match (EIP-712 approval per user)
+        const { sig: sigB, deadline: dlB } = await signApprovalFor(player1.address, wagerAmount);
+        const tx = await escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlB, sigB, { value: wagerAmount });
         const receipt = await tx.wait();
         const event = receipt?.logs.find(log => {
           try {
@@ -397,7 +466,7 @@ describe("CrashGamePvP", function () {
           data: event!.data 
         })?.args[0] as bigint;
         
-        await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
+        await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, { value: wagerAmount });
         
         // Settlement should not revert even if owner can't receive
         await expect(escrow.connect(oracle).settleMatch(matchId, player1.address))
@@ -418,8 +487,11 @@ describe("CrashGamePvP", function () {
       it("Should use fee at match creation, not settlement", async function () {
         const wagerAmount = ethers.parseEther("1");
         
-        // Create match with 0% fee
-        const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+        // Create match with 0% fee (EIP-712 approval per user)
+        const { sig: sigC, deadline: dlC } = await signApprovalFor(player1.address, wagerAmount);
+        const tx = await escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlC, sigC, { value: wagerAmount });
         const receipt = await tx.wait();
         const event = receipt?.logs.find(log => {
           try {
@@ -442,7 +514,7 @@ describe("CrashGamePvP", function () {
         await escrow.connect(owner).setFeePercent(10);
         
         // Player2 joins
-        await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
+        await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, { value: wagerAmount });
         
         // Settle match
         await escrow.connect(oracle).settleMatch(matchId, player1.address);
@@ -465,8 +537,11 @@ describe("CrashGamePvP", function () {
         
         const wagerAmount = 51n; // 51 wei
         
-        // Create and join match
-        const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+        // Create and join match (EIP-712 approval per user)
+        const { sig: sigD, deadline: dlD } = await signApprovalFor(player1.address, wagerAmount);
+        const tx = await escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlD, sigD, { value: wagerAmount });
         const receipt = await tx.wait();
         const event = receipt?.logs.find(log => {
           try {
@@ -481,7 +556,7 @@ describe("CrashGamePvP", function () {
           data: event!.data 
         })?.args[0] as bigint;
         
-        await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
+        await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, { value: wagerAmount });
         
         // Settle with player1 as winner
         await escrow.connect(oracle).settleMatch(matchId, player1.address);
@@ -507,8 +582,11 @@ describe("CrashGamePvP", function () {
     it("Should not allow oracle to cancel active match", async function () {
       const wagerAmount = ethers.parseEther("1");
       
-      // Create and join match
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      // Create and join match (EIP-712 approval per user)
+      const { sig: sigE, deadline: dlE } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlE, sigE, { value: wagerAmount });
       const receipt = await tx.wait();
       const event = receipt?.logs.find(log => {
         try {
@@ -523,7 +601,7 @@ describe("CrashGamePvP", function () {
         data: event!.data 
       })?.args[0] as bigint;
       
-      await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
+      await escrow.connect(player2)["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, { value: wagerAmount });
       
       // Oracle cannot cancel active match (no timeout functionality anymore)
       await expect(escrow.connect(oracle).cancelMatch(matchId))
@@ -534,7 +612,10 @@ describe("CrashGamePvP", function () {
       const wagerAmount = ethers.parseEther("1");
       
       // Create match
-      const tx = await escrow.connect(player1).createMatch({ value: wagerAmount });
+      const { sig: sig2, deadline: dl2 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl2, sig2, { value: wagerAmount });
       const receipt = await tx.wait();
       const event = receipt?.logs.find(log => {
         try {
@@ -577,6 +658,208 @@ describe("CrashGamePvP", function () {
     it("Should not allow zero address as oracle", async function () {
       await expect(escrow.connect(owner).setOracle(ethers.ZeroAddress))
         .to.be.revertedWith("Invalid oracle");
+    });
+  });
+
+  describe("Bet Approval", function () {
+    it("rejects signature bound to a different player", async function () {
+      const wagerAmount = ethers.parseEther("1");
+      // Oracle signs for player2, but player1 tries to use it
+      const { sig, deadline } = await signApprovalFor(player2.address, wagerAmount);
+      await expect(
+        escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount })
+      ).to.be.revertedWith("Bet not approved");
+    });
+
+    it("rejects expired approvals", async function () {
+      const wagerAmount = ethers.parseEther("1");
+      // TTL = 0, then advance time so it's expired
+      const { sig, deadline } = await signApprovalFor(player1.address, wagerAmount, 0n);
+      await time.increase(2);
+      await expect(
+        escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount })
+      ).to.be.revertedWith("Expired");
+    });
+
+    it("reverts when sent amount exceeds approved amount", async function () {
+      const approved = ethers.parseEther("1");
+      const sent = ethers.parseEther("2");
+      const { sig, deadline } = await signApprovalFor(player1.address, approved);
+      await expect(
+        escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: sent })
+      ).to.be.revertedWith("Bet not approved");
+    });
+
+    it("reverts when sent amount is less than approved amount", async function () {
+      const approved = ethers.parseEther("2");
+      const sent = ethers.parseEther("1");
+      const { sig, deadline } = await signApprovalFor(player1.address, approved);
+      await expect(
+        escrow
+          .connect(player1)
+          ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: sent })
+      ).to.be.revertedWith("Bet not approved");
+    });
+  });
+
+  describe("Referrals", function () {
+
+    it("splits referral pool equally when both players have referrers", async function () {
+      // Ensure platform fee covers referral pool
+      await escrow.connect(owner).setFeePercent(1);
+
+      const wagerAmount = ethers.parseEther("1");
+      const { sig: sigA, deadline: dlRA0 } = await signApprovalFor(player1.address, wagerAmount);
+      // Player1 creates with referrer player3
+      let tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](player3.address, dlRA0, sigA, { value: wagerAmount });
+      let receipt = await tx.wait();
+      const event = receipt?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const matchId = escrow.interface.parseLog({ topics: event!.topics as string[], data: event!.data })
+        ?.args[0] as bigint;
+
+      // Player2 joins with referrer owner
+      await escrow
+        .connect(player2)
+        ["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, owner.address, {
+          value: wagerAmount,
+        });
+
+      // Settle match (winner arbitrary)
+      await escrow.connect(oracle).settleMatch(matchId, player1.address);
+
+      const totalDeposit = wagerAmount * 2n;
+      const referralPool = (totalDeposit * 50n) / 10_000n; // 0.5%
+      const half = referralPool / 2n;
+
+      const balA = await escrow.referralBalances(player3.address);
+      const balB = await escrow.referralBalances(owner.address);
+      expect(balA).to.equal(half);
+      expect(balB).to.equal(half);
+    });
+
+    it("allocates full referral pool to a single referrer", async function () {
+      await escrow.connect(owner).setFeePercent(1);
+
+      const wagerAmount = ethers.parseEther("1");
+      const { sig: sigA, deadline: dlRA1 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](player3.address, dlRA1, sigA, { value: wagerAmount });
+      const receipt = await tx.wait();
+      const event = receipt?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const matchId = escrow.interface.parseLog({ topics: event!.topics as string[], data: event!.data })
+        ?.args[0] as bigint;
+
+      // Player2 joins without a referrer
+      await escrow
+        .connect(player2)
+        ["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, ethers.ZeroAddress, {
+          value: wagerAmount,
+        });
+
+      await escrow.connect(oracle).settleMatch(matchId, player1.address);
+
+      const totalDeposit = wagerAmount * 2n;
+      const referralPool = (totalDeposit * 50n) / 10_000n; // 0.5%
+
+      expect(await escrow.referralBalances(player3.address)).to.equal(referralPool);
+    });
+
+    it("caps referral payouts by available platform fee", async function () {
+      // Set platform fee to 0% so no referral payouts possible
+      await escrow.connect(owner).setFeePercent(0);
+
+      const wagerAmount = ethers.parseEther("1");
+      const { sig: sigA2, deadline: dlRA2 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](player3.address, dlRA2, sigA2, { value: wagerAmount });
+      const receipt = await tx.wait();
+      const event = receipt?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const matchId = escrow.interface.parseLog({ topics: event!.topics as string[], data: event!.data })
+        ?.args[0] as bigint;
+
+      // Player2 joins with a referrer too
+      await escrow
+        .connect(player2)
+        ["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, owner.address, {
+          value: wagerAmount,
+        });
+
+      await escrow.connect(oracle).settleMatch(matchId, player1.address);
+
+      expect(await escrow.referralBalances(player3.address)).to.equal(0n);
+      expect(await escrow.referralBalances(owner.address)).to.equal(0n);
+    });
+
+    it("uses snapshotted referral fee at creation even if updated later", async function () {
+      // Make sure platform fee is high enough to cover any pool
+      await escrow.connect(owner).setFeePercent(10);
+
+      const wagerAmount = ethers.parseEther("1");
+      const { sig: sigA3, deadline: dlRA3 } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](player3.address, dlRA3, sigA3, { value: wagerAmount });
+      const receipt = await tx.wait();
+      const event = receipt?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const matchId = escrow.interface.parseLog({ topics: event!.topics as string[], data: event!.data })
+        ?.args[0] as bigint;
+
+      // Change referral fee after creation to 10% (should not affect this match)
+      await escrow.connect(owner).setReferralFeeBp(1000);
+
+      // Player2 joins with referrer owner
+      await escrow
+        .connect(player2)
+        ["joinMatch(uint256,address,uint256,address)"](matchId, player1.address, wagerAmount, owner.address, {
+          value: wagerAmount,
+        });
+
+      await escrow.connect(oracle).settleMatch(matchId, player1.address);
+
+      const totalDeposit = wagerAmount * 2n;
+      const referralPoolSnap = (totalDeposit * 50n) / 10_000n; // 0.5% snapshotted
+      const half = referralPoolSnap / 2n;
+
+      expect(await escrow.referralBalances(player3.address)).to.equal(half);
+      expect(await escrow.referralBalances(owner.address)).to.equal(half);
     });
   });
 });

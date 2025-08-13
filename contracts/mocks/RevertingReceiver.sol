@@ -37,19 +37,20 @@ contract RevertingReceiver {
         // We need to forward it to the escrow
         (bool success, ) = escrow.call{value: expectedWager}(
             abi.encodeWithSignature(
-                "joinMatch(uint256,address,uint256)",
+                "joinMatch(uint256,address,uint256,address)",
                 matchId,
                 expectedOpponent,
-                expectedWager
+                expectedWager,
+                address(0)
             )
         );
         require(success, "Join match failed");
     }
     
-    // Function to create a match
-    function createMatch(address escrow) external payable returns (uint256) {
+    // Function to create a match (no-referrer) with explicit approval deadline
+    function createMatch(address escrow, bytes memory sig, uint256 deadline) external payable returns (uint256) {
         (bool success, bytes memory data) = escrow.call{value: msg.value}(
-            abi.encodeWithSignature("createMatch()")
+            abi.encodeWithSignature("createMatch(address,uint256,bytes)", address(0), deadline, sig)
         );
         require(success, "Create match failed");
         
@@ -58,10 +59,10 @@ contract RevertingReceiver {
     }
     
     // Overloaded function to create match with specific wager (for testing)
-    function createMatch(address escrow, uint256 wagerAmount) external returns (uint256) {
+    function createMatch(address escrow, bytes memory sig, uint256 deadline, uint256 wagerAmount) external returns (uint256) {
         require(address(this).balance >= wagerAmount, "Insufficient balance");
         (bool success, bytes memory data) = escrow.call{value: wagerAmount}(
-            abi.encodeWithSignature("createMatch()")
+            abi.encodeWithSignature("createMatch(address,uint256,bytes)", address(0), deadline, sig)
         );
         require(success, "Create match failed");
         
