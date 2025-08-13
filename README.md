@@ -123,17 +123,17 @@ Settlement and cancelation
 - `function settleMatch(uint256 matchId, address winner) external onlyOracle`
   - Requires `Active`
   - Draw (winner == 0): marks Refunded; clears both active slots; credits both players their full wager; emits two MatchRefunded events; no fees charged
-  - Winner path: credits full net pot to `claimable[matchId][winner]` (pull-payment) and accrues fees into `feeClaimable[owner]`
+  - Winner path: credits full net pot to `userBalance[winner]` (pull-payment) and accrues fees into `feeClaimable[owner]`
 
 - `function cancelMyMatch(uint256 matchId) external`
   - Only Player A; only while `AwaitingOpponent`
-  - Attempts push refund; falls back to pull-credit if push fails
+  - Directly refunds to Player A via push payment (user-controlled recipient)
 
 - `function cancelMatch(uint256 matchId) external onlyOracle`
-  - Only `AwaitingOpponent`; credits Player A’s deposit to pull-payment
+  - Only `AwaitingOpponent`; credits Player A’s deposit to `userBalance[playerA]`
 
 Withdrawals and admin
-- `function withdraw(uint256 matchId) external`
+- `function withdraw() external` — player withdraws aggregated balance
 - `function withdrawFees(address to) external onlyOwner`
 - `function setFeePercent(uint256 newFeePercent) external onlyOwner`
 - `function setOracle(address newOracle) external onlyOwner`
@@ -141,6 +141,7 @@ Withdrawals and admin
 ### Views
 - `function getMatch(uint256 matchId) external view returns (...)`
 - `function getActiveMatch(address player) external view returns (uint256)`
+- `function userBalance(address user) external view returns (uint256)`
 - `function canPlayerCommit(address player) external view returns (bool)`
 - `function hasActiveMatch(address player) external view returns (bool)`
 - `function getMatchState(uint256 matchId) external view returns (MatchStatus)`

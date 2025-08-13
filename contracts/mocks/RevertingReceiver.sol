@@ -78,13 +78,13 @@ contract RevertingReceiver {
     }
     
     // Function to withdraw from escrow (pull payment)
-    function withdrawFromEscrow(address escrow, uint256 matchId) external {
+    function withdrawFromEscrow(address escrow) external {
         // Temporarily enable ETH acceptance for withdrawal
         bool previousAcceptETH = acceptETH;
         acceptETH = true;
         
         (bool success, ) = escrow.call(
-            abi.encodeWithSignature("withdraw(uint256)", matchId)
+            abi.encodeWithSignature("withdraw()")
         );
         
         // Restore previous state

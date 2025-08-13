@@ -199,13 +199,13 @@ describe("CrashGamePvP", function () {
     it("Should use pull-payment pattern for winner payout", async function () {
       await escrow.connect(oracle).settleMatch(matchId, player1.address);
       
-      // Check claimable amount
-      const claimable = await escrow.claimable(matchId, player1.address);
-      expect(claimable).to.equal(wagerAmount * 2n); // Full pot with 0% fee
+      // Check aggregated balance amount
+      const bal = await escrow.userBalance(player1.address);
+      expect(bal).to.equal(wagerAmount * 2n); // Full pot with 0% fee
       
-      // Withdraw funds
+      // Withdraw funds (aggregated)
       const balanceBefore = await ethers.provider.getBalance(player1.address);
-      const tx = await escrow.connect(player1).withdraw(matchId);
+      const tx = await escrow.connect(player1).withdraw();
       const receipt = await tx.wait();
       const gasUsed = receipt!.gasUsed * receipt!.gasPrice!;
       const balanceAfter = await ethers.provider.getBalance(player1.address);
@@ -213,17 +213,17 @@ describe("CrashGamePvP", function () {
       expect(balanceAfter).to.be.closeTo(balanceBefore + (wagerAmount * 2n) - gasUsed, ethers.parseEther("0.001"));
       
       // Verify can't withdraw twice
-      await expect(escrow.connect(player1).withdraw(matchId)).to.be.revertedWith("Nothing to withdraw");
+      await expect(escrow.connect(player1).withdraw()).to.be.revertedWith("Nothing to withdraw");
     });
 
     it("Should treat zero address winner as draw and refund both", async function () {
       await escrow.connect(oracle).settleMatch(matchId, ethers.ZeroAddress);
 
       // Each player gets their wager back, no fees
-      const claimableA = await escrow.claimable(matchId, player1.address);
-      const claimableB = await escrow.claimable(matchId, player2.address);
-      expect(claimableA).to.equal(wagerAmount);
-      expect(claimableB).to.equal(wagerAmount);
+      const balA = await escrow.userBalance(player1.address);
+      const balB = await escrow.userBalance(player2.address);
+      expect(balA).to.equal(wagerAmount);
+      expect(balB).to.equal(wagerAmount);
       expect(await escrow.feeClaimable(owner.address)).to.equal(0n);
       const match = await escrow.matches(matchId);
       expect(match.status).to.equal(4); // Refunded
@@ -278,12 +278,12 @@ describe("CrashGamePvP", function () {
       // Check that player received refund directly (minus gas)
       expect(balanceAfter).to.be.closeTo(
         balanceBefore + wagerAmount - gasUsed,
-        ethers.parseEther("0.001") // Allow small variance for gas estimation
+        ethers.parseEther("0.001")
       );
       
-      // Check claimable should be 0 since push succeeded
-      const claimable = await escrow.claimable(matchId, player1.address);
-      expect(claimable).to.equal(0);
+      // Aggregated balance should remain 0 for cancelMyMatch
+      const bal = await escrow.userBalance(player1.address);
+      expect(bal).to.equal(0);
       
       const match = await escrow.matches(matchId);
       expect(match.status).to.equal(4); // Refunded
@@ -319,23 +319,10 @@ describe("CrashGamePvP", function () {
       // Now disable ETH acceptance to simulate push payment failure
       await revertingContract.setAcceptETH(false);
       
-      // Cancel match - push will fail, should fallback to pull
-      await revertingContract.cancelMatch(await escrow.getAddress(), revertingMatchId);
-      
-      // Check that funds are in claimable (pull payment)
-      const claimable = await escrow.claimable(revertingMatchId, await revertingContract.getAddress());
-      expect(claimable).to.equal(wagerAmount);
-      
-      // Verify match is refunded
-      const match = await escrow.matches(revertingMatchId);
-      expect(match.status).to.equal(4); // Refunded
-      
-      // Contract can still withdraw via pull
-      await revertingContract.withdrawFromEscrow(await escrow.getAddress(), revertingMatchId);
-      
-      // Verify claimable is now 0
-      const finalClaimable = await escrow.claimable(revertingMatchId, await revertingContract.getAddress());
-      expect(finalClaimable).to.equal(0);
+      // Cancel match - push will fail; tx should revert
+      await expect(
+        revertingContract.cancelMatch(await escrow.getAddress(), revertingMatchId)
+      ).to.be.reverted;
     });
   });
 
@@ -380,9 +367,9 @@ describe("CrashGamePvP", function () {
         await expect(escrow.connect(oracle).settleMatch(matchId, player1.address))
           .to.not.be.reverted;
         
-        // Player1 has claimable funds
-        const claimable = await escrow.claimable(matchId, player1.address);
-        expect(claimable).to.equal(wagerAmount * 2n); // Full pot with 0% fee
+        // Player1 has aggregated funds
+        const bal = await escrow.userBalance(player1.address);
+        expect(bal).to.equal(wagerAmount * 2n); // Full pot with 0% fee
         
         // The pull-payment pattern ensures settlement always succeeds
         // regardless of recipient's ability to receive ETH
@@ -461,8 +448,8 @@ describe("CrashGamePvP", function () {
         await escrow.connect(oracle).settleMatch(matchId, player1.address);
         
         // Winner should get full pot (no fee deducted)
-        const claimable = await escrow.claimable(matchId, player1.address);
-        expect(claimable).to.equal(wagerAmount * 2n); // Full pot, no fee
+        const bal = await escrow.userBalance(player1.address);
+        expect(bal).to.equal(wagerAmount * 2n); // Full pot, no fee
         
         // No fees should be claimable
         const feeClaimable = await escrow.feeClaimable(owner.address);
@@ -500,8 +487,8 @@ describe("CrashGamePvP", function () {
         await escrow.connect(oracle).settleMatch(matchId, player1.address);
         
         // Check winner's claimable amount
-        const claimable1 = await escrow.claimable(matchId, player1.address);
-        const claimable2 = await escrow.claimable(matchId, player2.address);
+        const claimable1 = await escrow.userBalance(player1.address);
+        const claimable2 = await escrow.userBalance(player2.address);
         
         // Total pot = 102 wei
         // Fee = floor(102 * 1 / 100) = 1 wei
@@ -566,8 +553,8 @@ describe("CrashGamePvP", function () {
       await expect(escrow.connect(oracle).cancelMatch(matchId))
         .to.not.be.reverted;
       
-      // Player1 gets refund
-      expect(await escrow.claimable(matchId, player1.address)).to.equal(wagerAmount);
+      // Player1 gets refund credited
+      expect(await escrow.userBalance(player1.address)).to.equal(wagerAmount);
     });
   });
   

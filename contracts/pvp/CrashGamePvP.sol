@@ -47,8 +47,8 @@ contract CrashGamePvP is ReentrancyGuard {
     // Dynamic fee percentage (starts at 0%)
     uint256 public feePercent = 0;
     
-    // Pull-payment pattern: track claimable amounts
-    mapping(uint256 => mapping(address => uint256)) public claimable;
+    // Aggregated user balances for winnings/refunds (pull-payment)
+    mapping(address => uint256) public userBalance;
     mapping(address => uint256) public feeClaimable;
 
     // --- Events ---
@@ -58,7 +58,8 @@ contract CrashGamePvP is ReentrancyGuard {
     event MatchRefunded(uint256 indexed matchId, address indexed player, uint256 amount);
     event MatchCanceled(uint256 indexed matchId, address playerA, address playerB);
     event FeePercentUpdated(uint256 oldFee, uint256 newFee);
-    event Withdrawn(address indexed user, uint256 indexed matchId, uint256 amount);
+    event BalanceCredited(address indexed user, uint256 amount, uint256 indexed matchId);
+    event BalanceWithdrawn(address indexed user, uint256 amount);
     event FeeWithdrawn(address indexed to, uint256 amount);
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
 
@@ -163,11 +164,13 @@ contract CrashGamePvP is ReentrancyGuard {
             _clearActiveMatch(matchData.playerB, matchId);
 
             uint256 refundEach = matchData.wagerAmount;
-            claimable[matchId][matchData.playerA] += refundEach;
-            claimable[matchId][matchData.playerB] += refundEach;
+            userBalance[matchData.playerA] += refundEach;
+            userBalance[matchData.playerB] += refundEach;
 
             emit MatchRefunded(matchId, matchData.playerA, refundEach);
             emit MatchRefunded(matchId, matchData.playerB, refundEach);
+            emit BalanceCredited(matchData.playerA, refundEach, matchId);
+            emit BalanceCredited(matchData.playerB, refundEach, matchId);
             return;
         }
 
@@ -186,9 +189,10 @@ contract CrashGamePvP is ReentrancyGuard {
         _clearActiveMatch(matchData.playerA, matchId);
         _clearActiveMatch(matchData.playerB, matchId);
         
-        claimable[matchId][winner] += netPot;
+        userBalance[winner] += netPot;
         
         emit MatchSettled(matchId, winner, netPot);
+        emit BalanceCredited(winner, netPot, matchId);
         
         if (fee > 0) {
             feeClaimable[owner] += fee;
@@ -209,13 +213,9 @@ contract CrashGamePvP is ReentrancyGuard {
         uint256 refundAmount = matchData.wagerAmount;
         
         _clearActiveMatch(msg.sender, matchId);
-        
-        // Try to push first (1-tx UX). Don't revert the whole tx if it fails.
+        // Directly refund to creator (user-controlled recipient)
         (bool success, ) = payable(msg.sender).call{value: refundAmount}("");
-        if (!success) {
-            // Fallback to pull so the cancel still succeeds.
-            claimable[matchId][msg.sender] += refundAmount;
-        }
+        require(success, "Refund failed");
         
         emit MatchRefunded(matchId, msg.sender, refundAmount);
     }
@@ -240,10 +240,11 @@ contract CrashGamePvP is ReentrancyGuard {
         // Remove from active matches
         _clearActiveMatch(matchData.playerA, matchId);
         
-        // Refund playerA's deposit
-        claimable[matchId][matchData.playerA] += matchData.totalDeposit;
+        // Refund playerA's deposit to aggregated balance
+        userBalance[matchData.playerA] += matchData.totalDeposit;
         
         emit MatchCanceled(matchId, matchData.playerA, address(0));
+        emit BalanceCredited(matchData.playerA, matchData.totalDeposit, matchId);
     }
 
     /**
@@ -328,19 +329,15 @@ contract CrashGamePvP is ReentrancyGuard {
     // --- Pull-Payment Functions ---
     
     /**
-     * @dev Withdraw claimable amount from a match
-     * @param matchId The match to withdraw from
+     * @dev Withdraw full aggregated balance (winnings/refunds)
      */
-    function withdraw(uint256 matchId) external nonReentrant {
-        uint256 amount = claimable[matchId][msg.sender];
+    function withdraw() external nonReentrant {
+        uint256 amount = userBalance[msg.sender];
         require(amount > 0, "Nothing to withdraw");
-        
-        claimable[matchId][msg.sender] = 0;
-        
+        userBalance[msg.sender] = 0;
         (bool success, ) = msg.sender.call{value: amount}("");
         require(success, "Withdrawal failed");
-        
-        emit Withdrawn(msg.sender, matchId, amount);
+        emit BalanceWithdrawn(msg.sender, amount);
     }
     
     /**
