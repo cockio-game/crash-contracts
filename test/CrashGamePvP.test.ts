@@ -42,7 +42,7 @@ describe("CrashGamePvP", function () {
         topics: event!.topics as string[], 
         data: event!.data 
       });
-      const matchId = parsedEvent?.args[0];
+      const matchId = parsedEvent?.args[0] as bigint;
       
       expect(matchId).to.not.be.undefined;
       
@@ -70,7 +70,7 @@ describe("CrashGamePvP", function () {
       const matchId1 = escrow.interface.parseLog({ 
         topics: event1!.topics as string[], 
         data: event1!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
       
       // Create second match
       const tx2 = await escrow.connect(player2).createMatch({ value: wagerAmount });
@@ -86,7 +86,7 @@ describe("CrashGamePvP", function () {
       const matchId2 = escrow.interface.parseLog({ 
         topics: event2!.topics as string[], 
         data: event2!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
       
       expect(matchId1).to.not.equal(matchId2);
     });
@@ -105,7 +105,7 @@ describe("CrashGamePvP", function () {
   });
 
   describe("Match Joining", function () {
-    let matchId: string;
+    let matchId: bigint;
     let wagerAmount: bigint;
 
     beforeEach(async function () {
@@ -124,7 +124,7 @@ describe("CrashGamePvP", function () {
       matchId = escrow.interface.parseLog({ 
         topics: event!.topics as string[], 
         data: event!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
     });
 
     it("Should allow another player to join the match", async function () {
@@ -167,7 +167,7 @@ describe("CrashGamePvP", function () {
   });
 
   describe("Match Settlement", function () {
-    let matchId: string;
+    let matchId: bigint;
     let wagerAmount: bigint;
 
     beforeEach(async function () {
@@ -186,7 +186,7 @@ describe("CrashGamePvP", function () {
       matchId = escrow.interface.parseLog({ 
         topics: event!.topics as string[], 
         data: event!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
       
       await escrow.connect(player2).joinMatch(
         matchId,
@@ -216,11 +216,17 @@ describe("CrashGamePvP", function () {
       await expect(escrow.connect(player1).withdraw(matchId)).to.be.revertedWith("Nothing to withdraw");
     });
 
-    it("Should reject zero address as winner", async function () {
-      // Attempt to settle with zero address should revert
-      await expect(
-        escrow.connect(oracle).settleMatch(matchId, ethers.ZeroAddress)
-      ).to.be.revertedWith("Winner cannot be zero address");
+    it("Should treat zero address winner as draw and refund both", async function () {
+      await escrow.connect(oracle).settleMatch(matchId, ethers.ZeroAddress);
+
+      // Each player gets their wager back, no fees
+      const claimableA = await escrow.claimable(matchId, player1.address);
+      const claimableB = await escrow.claimable(matchId, player2.address);
+      expect(claimableA).to.equal(wagerAmount);
+      expect(claimableB).to.equal(wagerAmount);
+      expect(await escrow.feeClaimable(owner.address)).to.equal(0n);
+      const match = await escrow.matches(matchId);
+      expect(match.status).to.equal(4); // Refunded
     });
     
     it("Should only allow valid players as winners", async function () {
@@ -239,7 +245,7 @@ describe("CrashGamePvP", function () {
   });
 
   describe("Match Cancellation", function () {
-    let matchId: string;
+    let matchId: bigint;
     let wagerAmount: bigint;
 
     beforeEach(async function () {
@@ -257,7 +263,7 @@ describe("CrashGamePvP", function () {
       matchId = escrow.interface.parseLog({ 
         topics: event!.topics as string[], 
         data: event!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
     });
 
     it("Should refund directly via push payment on cancel", async function () {
@@ -308,7 +314,7 @@ describe("CrashGamePvP", function () {
       const filter = escrow.filters.MatchCreated();
       const events = await escrow.queryFilter(filter);
       const lastEvent = events[events.length - 1];
-      const revertingMatchId = lastEvent.args[0];
+      const revertingMatchId = lastEvent.args[0] as bigint;
       
       // Now disable ETH acceptance to simulate push payment failure
       await revertingContract.setAcceptETH(false);
@@ -363,7 +369,7 @@ describe("CrashGamePvP", function () {
         const matchId = escrow.interface.parseLog({ 
           topics: event!.topics as string[], 
           data: event!.data 
-        })?.args[0];
+        })?.args[0] as bigint;
         
         // Player2 joins normally
         await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
@@ -402,7 +408,7 @@ describe("CrashGamePvP", function () {
         const matchId = escrow.interface.parseLog({ 
           topics: event!.topics as string[], 
           data: event!.data 
-        })?.args[0];
+        })?.args[0] as bigint;
         
         await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
         
@@ -439,7 +445,7 @@ describe("CrashGamePvP", function () {
         const matchId = escrow.interface.parseLog({ 
           topics: event!.topics as string[], 
           data: event!.data 
-        })?.args[0];
+        })?.args[0] as bigint;
         
         // Verify fee was snapshotted at 0
         const match = await escrow.matches(matchId);
@@ -486,7 +492,7 @@ describe("CrashGamePvP", function () {
         const matchId = escrow.interface.parseLog({ 
           topics: event!.topics as string[], 
           data: event!.data 
-        })?.args[0];
+        })?.args[0] as bigint;
         
         await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
         
@@ -528,7 +534,7 @@ describe("CrashGamePvP", function () {
       const matchId = escrow.interface.parseLog({ 
         topics: event!.topics as string[], 
         data: event!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
       
       await escrow.connect(player2).joinMatch(matchId, player1.address, wagerAmount, { value: wagerAmount });
       
@@ -554,7 +560,7 @@ describe("CrashGamePvP", function () {
       const matchId = escrow.interface.parseLog({ 
         topics: event!.topics as string[], 
         data: event!.data 
-      })?.args[0];
+      })?.args[0] as bigint;
       
       // Oracle can cancel awaiting match
       await expect(escrow.connect(oracle).cancelMatch(matchId))

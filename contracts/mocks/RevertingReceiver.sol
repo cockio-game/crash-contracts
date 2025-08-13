@@ -29,7 +29,7 @@ contract RevertingReceiver {
     // Function to participate in PvP matches
     function joinMatch(
         address escrow,
-        bytes32 matchId,
+        uint256 matchId,
         address expectedOpponent,
         uint256 expectedWager
     ) external {
@@ -37,7 +37,7 @@ contract RevertingReceiver {
         // We need to forward it to the escrow
         (bool success, ) = escrow.call{value: expectedWager}(
             abi.encodeWithSignature(
-                "joinMatch(bytes32,address,uint256)",
+                "joinMatch(uint256,address,uint256)",
                 matchId,
                 expectedOpponent,
                 expectedWager
@@ -47,18 +47,18 @@ contract RevertingReceiver {
     }
     
     // Function to create a match
-    function createMatch(address escrow) external payable returns (bytes32) {
+    function createMatch(address escrow) external payable returns (uint256) {
         (bool success, bytes memory data) = escrow.call{value: msg.value}(
             abi.encodeWithSignature("createMatch()")
         );
         require(success, "Create match failed");
         
         // Decode and return the matchId
-        return abi.decode(data, (bytes32));
+        return abi.decode(data, (uint256));
     }
     
     // Overloaded function to create match with specific wager (for testing)
-    function createMatch(address escrow, uint256 wagerAmount) external returns (bytes32) {
+    function createMatch(address escrow, uint256 wagerAmount) external returns (uint256) {
         require(address(this).balance >= wagerAmount, "Insufficient balance");
         (bool success, bytes memory data) = escrow.call{value: wagerAmount}(
             abi.encodeWithSignature("createMatch()")
@@ -66,25 +66,25 @@ contract RevertingReceiver {
         require(success, "Create match failed");
         
         // Decode and return the matchId
-        return abi.decode(data, (bytes32));
+        return abi.decode(data, (uint256));
     }
     
     // Function to cancel a match
-    function cancelMatch(address escrow, bytes32 matchId) external {
+    function cancelMatch(address escrow, uint256 matchId) external {
         (bool success, ) = escrow.call(
-            abi.encodeWithSignature("cancelMyMatch(bytes32)", matchId)
+            abi.encodeWithSignature("cancelMyMatch(uint256)", matchId)
         );
         require(success, "Cancel match failed");
     }
     
     // Function to withdraw from escrow (pull payment)
-    function withdrawFromEscrow(address escrow, bytes32 matchId) external {
+    function withdrawFromEscrow(address escrow, uint256 matchId) external {
         // Temporarily enable ETH acceptance for withdrawal
         bool previousAcceptETH = acceptETH;
         acceptETH = true;
         
         (bool success, ) = escrow.call(
-            abi.encodeWithSignature("withdraw(bytes32)", matchId)
+            abi.encodeWithSignature("withdraw(uint256)", matchId)
         );
         
         // Restore previous state

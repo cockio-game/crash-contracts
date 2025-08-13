@@ -36,32 +36,29 @@ contract CrashGamePvP is ReentrancyGuard {
     address public oracleAddress;
     
     // Minimal storage: only active matches
-    mapping(bytes32 => Match) public matches;
+    mapping(uint256 => Match) public matches;
     
-    // Track player's active matches to prevent double-spending
-    mapping(address => bytes32[]) public playerActiveMatches;
+    // Track player's single active match (0 means none)
+    mapping(address => uint256) public activeMatchOf;
     
     // Counter for generating unique match IDs
     uint256 public matchCounter;
-    
-    // Maximum active matches per player (set to 1 for strict enforcement)
-    uint256 public constant MAX_ACTIVE_MATCHES = 1;
     
     // Dynamic fee percentage (starts at 0%)
     uint256 public feePercent = 0;
     
     // Pull-payment pattern: track claimable amounts
-    mapping(bytes32 => mapping(address => uint256)) public claimable;
+    mapping(uint256 => mapping(address => uint256)) public claimable;
     mapping(address => uint256) public feeClaimable;
 
     // --- Events ---
-    event MatchCreated(bytes32 indexed matchId, address indexed playerA, uint256 wagerAmount);
-    event MatchReady(bytes32 indexed matchId, address indexed playerA, address indexed playerB);
-    event MatchSettled(bytes32 indexed matchId, address indexed winner, uint256 payout);
-    event MatchRefunded(bytes32 indexed matchId, address indexed player, uint256 amount);
-    event MatchCanceled(bytes32 indexed matchId, address playerA, address playerB);
+    event MatchCreated(uint256 indexed matchId, address indexed playerA, uint256 wagerAmount);
+    event MatchReady(uint256 indexed matchId, address indexed playerA, address indexed playerB);
+    event MatchSettled(uint256 indexed matchId, address indexed winner, uint256 payout);
+    event MatchRefunded(uint256 indexed matchId, address indexed player, uint256 amount);
+    event MatchCanceled(uint256 indexed matchId, address playerA, address playerB);
     event FeePercentUpdated(uint256 oldFee, uint256 newFee);
-    event Withdrawn(address indexed user, bytes32 indexed matchId, uint256 amount);
+    event Withdrawn(address indexed user, uint256 indexed matchId, uint256 amount);
     event FeeWithdrawn(address indexed to, uint256 amount);
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
 
@@ -86,20 +83,13 @@ contract CrashGamePvP is ReentrancyGuard {
      * @dev Create a new match with deposit. Returns the generated matchId.
      * @return matchId The unique identifier generated for this match
      */
-    function createMatch() external payable nonReentrant returns (bytes32 matchId) {
+    function createMatch() external payable nonReentrant returns (uint256 matchId) {
         require(msg.value > 0, "Invalid wager");
-        require(
-            playerActiveMatches[msg.sender].length < MAX_ACTIVE_MATCHES,
-            "Already in active match"
-        );
+        require(activeMatchOf[msg.sender] == 0, "Already in active match");
         
-        // Generate unique matchId from contract address + counter
-        // Simple and deterministic
+        // Generate sequential matchId
         matchCounter++;
-        matchId = keccak256(abi.encodePacked(
-            address(this),
-            matchCounter
-        ));
+        matchId = matchCounter;
         
         Match storage matchData = matches[matchId];
         require(matchData.status == MatchStatus.None, "Match ID collision"); // Should never happen
@@ -111,7 +101,7 @@ contract CrashGamePvP is ReentrancyGuard {
         matchData.createdAt = block.timestamp;
         matchData.feeAtCreate = uint8(feePercent);
         
-        playerActiveMatches[msg.sender].push(matchId);
+        activeMatchOf[msg.sender] = matchId;
         
         emit MatchCreated(matchId, msg.sender, msg.value);
         
@@ -126,7 +116,7 @@ contract CrashGamePvP is ReentrancyGuard {
      * @param expectedWager Expected wager amount to prevent front-running
      */
     function joinMatch(
-        bytes32 matchId,
+        uint256 matchId,
         address expectedOpponent,
         uint256 expectedWager
     ) external payable nonReentrant {
@@ -141,17 +131,14 @@ contract CrashGamePvP is ReentrancyGuard {
             expectedOpponent == address(0) || expectedOpponent == matchData.playerA,
             "Opponent mismatch"
         );
-        require(
-            playerActiveMatches[msg.sender].length < MAX_ACTIVE_MATCHES,
-            "Already in active match"
-        );
+        require(activeMatchOf[msg.sender] == 0, "Already in active match");
         
         matchData.playerB = msg.sender;
         matchData.totalDeposit += msg.value;
         matchData.status = MatchStatus.Active;
         matchData.activeAt = block.timestamp;
         
-        playerActiveMatches[msg.sender].push(matchId);
+        activeMatchOf[msg.sender] = matchId;
         
         emit MatchReady(matchId, matchData.playerA, msg.sender);
     }
@@ -162,34 +149,47 @@ contract CrashGamePvP is ReentrancyGuard {
      * @param winner Winner address (must be one of the two players)
      */
     function settleMatch(
-        bytes32 matchId,
+        uint256 matchId,
         address winner
     ) external onlyOracle nonReentrant {
         Match storage matchData = matches[matchId];
         require(matchData.status == MatchStatus.Active, "Match not active");
-        require(winner != address(0), "Winner cannot be zero address");
+
+        // Draw path: refund both players fully, no fees
+        if (winner == address(0)) {
+            matchData.status = MatchStatus.Refunded;
+
+            _clearActiveMatch(matchData.playerA, matchId);
+            _clearActiveMatch(matchData.playerB, matchId);
+
+            uint256 refundEach = matchData.wagerAmount;
+            claimable[matchId][matchData.playerA] += refundEach;
+            claimable[matchId][matchData.playerB] += refundEach;
+
+            emit MatchRefunded(matchId, matchData.playerA, refundEach);
+            emit MatchRefunded(matchId, matchData.playerB, refundEach);
+            return;
+        }
+
+        // Winner path: fees apply
         require(
             winner == matchData.playerA || 
             winner == matchData.playerB,
             "Invalid winner"
         );
-
         matchData.status = MatchStatus.Settled;
         
         uint256 totalPot = matchData.totalDeposit;
         uint256 fee = (totalPot * matchData.feeAtCreate) / 100;
         uint256 netPot = totalPot - fee;
         
-        // Clear player active matches
-        _removeActiveMatch(matchData.playerA, matchId);
-        _removeActiveMatch(matchData.playerB, matchId);
+        _clearActiveMatch(matchData.playerA, matchId);
+        _clearActiveMatch(matchData.playerB, matchId);
         
-        // Credit winner payout (no draws allowed)
         claimable[matchId][winner] += netPot;
         
         emit MatchSettled(matchId, winner, netPot);
         
-        // Credit fee to owner
         if (fee > 0) {
             feeClaimable[owner] += fee;
         }
@@ -199,7 +199,7 @@ contract CrashGamePvP is ReentrancyGuard {
      * @dev Cancel a match if you're the creator and no opponent has joined yet
      * @param matchId Match to cancel
      */
-    function cancelMyMatch(bytes32 matchId) external nonReentrant {
+    function cancelMyMatch(uint256 matchId) external nonReentrant {
         Match storage matchData = matches[matchId];
         
         require(matchData.status == MatchStatus.AwaitingOpponent, "Invalid state");
@@ -208,7 +208,7 @@ contract CrashGamePvP is ReentrancyGuard {
         matchData.status = MatchStatus.Refunded;
         uint256 refundAmount = matchData.wagerAmount;
         
-        _removeActiveMatch(msg.sender, matchId);
+        _clearActiveMatch(msg.sender, matchId);
         
         // Try to push first (1-tx UX). Don't revert the whole tx if it fails.
         (bool success, ) = payable(msg.sender).call{value: refundAmount}("");
@@ -225,7 +225,7 @@ contract CrashGamePvP is ReentrancyGuard {
      * @param matchId Match to cancel
      */
     function cancelMatch(
-        bytes32 matchId
+        uint256 matchId
     ) external onlyOracle nonReentrant {
         Match storage matchData = matches[matchId];
         
@@ -238,7 +238,7 @@ contract CrashGamePvP is ReentrancyGuard {
         matchData.status = MatchStatus.Refunded;
         
         // Remove from active matches
-        _removeActiveMatch(matchData.playerA, matchId);
+        _clearActiveMatch(matchData.playerA, matchId);
         
         // Refund playerA's deposit
         claimable[matchId][matchData.playerA] += matchData.totalDeposit;
@@ -247,19 +247,11 @@ contract CrashGamePvP is ReentrancyGuard {
     }
 
     /**
-     * @dev Remove match from player's active matches array
+     * @dev Clear player's active match if it matches the provided matchId
      */
-    function _removeActiveMatch(address player, bytes32 matchId) private {
-        bytes32[] storage activeMatches = playerActiveMatches[player];
-        uint256 length = activeMatches.length;
-        
-        for (uint256 i = 0; i < length; i++) {
-            if (activeMatches[i] == matchId) {
-                // Move last element to this position and pop
-                activeMatches[i] = activeMatches[length - 1];
-                activeMatches.pop();
-                break;
-            }
+    function _clearActiveMatch(address player, uint256 matchId) private {
+        if (activeMatchOf[player] == matchId) {
+            activeMatchOf[player] = 0;
         }
     }
 
@@ -268,7 +260,7 @@ contract CrashGamePvP is ReentrancyGuard {
     /**
      * @dev Get match details
      */
-    function getMatch(bytes32 matchId) external view returns (
+    function getMatch(uint256 matchId) external view returns (
         address playerA,
         address playerB,
         uint256 wagerAmount,
@@ -292,28 +284,29 @@ contract CrashGamePvP is ReentrancyGuard {
     /**
      * @dev Get player's active matches
      */
-    function getPlayerActiveMatches(address player) external view returns (bytes32[] memory) {
-        return playerActiveMatches[player];
+    function getActiveMatch(address player) external view returns (uint256) {
+        return activeMatchOf[player];
     }
+
 
     /**
      * @dev Check if player can commit to a new match
      */
     function canPlayerCommit(address player) external view returns (bool) {
-        return playerActiveMatches[player].length < MAX_ACTIVE_MATCHES;
+        return activeMatchOf[player] == 0;
     }
     
     /**
      * @dev Check if player has any active matches
      */
     function hasActiveMatch(address player) external view returns (bool) {
-        return playerActiveMatches[player].length > 0;
+        return activeMatchOf[player] != 0;
     }
     
     /**
      * @dev Get match status for frontend
      */
-    function getMatchState(bytes32 matchId) external view returns (MatchStatus status) {
+    function getMatchState(uint256 matchId) external view returns (MatchStatus status) {
         return matches[matchId].status;
     }
     
@@ -338,7 +331,7 @@ contract CrashGamePvP is ReentrancyGuard {
      * @dev Withdraw claimable amount from a match
      * @param matchId The match to withdraw from
      */
-    function withdraw(bytes32 matchId) external nonReentrant {
+    function withdraw(uint256 matchId) external nonReentrant {
         uint256 amount = claimable[matchId][msg.sender];
         require(amount > 0, "Nothing to withdraw");
         
