@@ -155,15 +155,16 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     }
     
     /**
-     * @dev Join an existing match as playerB
-     * @param matchId The match to join
-     * @param expectedOpponent Expected opponent address to prevent front-running
-     *                        Pass address(0) to skip this check (less secure)
-     * @param expectedWager Expected wager amount to prevent front-running
-     */
-    /**
-     * @dev Join an existing match as playerB, optionally passing a referrer (use address(0) for none).
-     *      Requires an EIP-712 oracle approval for the joiner's bet-size.
+     * @dev Join an existing match as playerB.
+     * Requires an oracle EIP-712 approval for the joiner’s bet-size.
+     * - Uses expectedOpponent/expectedWager to protect against front‑running.
+     * - Enforces at most one active match per address.
+     * @param matchId Match to join.
+     * @param expectedOpponent Expected address of playerA; set address(0) to skip check.
+     * @param expectedWager Expected wager (must equal match.wagerAmount).
+     * @param referrer Optional referrer for the joiner; use address(0) for none.
+     * @param deadline Approval expiry timestamp (seconds since epoch).
+     * @param sig Oracle EIP-712 signature over BetApproval(player,version,amount,deadline).
      */
     function joinMatch(
         uint256 matchId,
