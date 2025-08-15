@@ -328,17 +328,23 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
                 if (half > 0) {
                     referralBalances[refA] += half;
                     referralEarned[refA] += half;
+                    emit ReferralPaid(refA, matchData.playerA, half);
+
                     referralBalances[refB] += half;
                     referralEarned[refB] += half;
+                    emit ReferralPaid(refB, matchData.playerB, half);
+
                     remainingFee -= (half * 2);
                 }
             } else if (refA != address(0)) {
                 referralBalances[refA] += allocatable;
                 referralEarned[refA] += allocatable;
+                emit ReferralPaid(refA, matchData.playerA, allocatable);
                 remainingFee -= allocatable;
             } else if (refB != address(0)) {
                 referralBalances[refB] += allocatable;
                 referralEarned[refB] += allocatable;
+                emit ReferralPaid(refB, matchData.playerB, allocatable);
                 remainingFee -= allocatable;
             }
         }
@@ -370,9 +376,12 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
         uint256 refundAmount = matchData.wagerAmount;
         
         _clearActiveMatch(msg.sender, matchId);
-        // Directly refund to creator (user-controlled recipient)
+        // Try direct push refund to creator; on failure, credit to pull-balance
         (bool success, ) = payable(msg.sender).call{value: refundAmount}("");
-        require(success, "Refund failed");
+        if (!success) {
+            userBalance[msg.sender] += refundAmount;
+            emit BalanceCredited(msg.sender, refundAmount, matchId);
+        }
         
         emit MatchRefunded(matchId, msg.sender, refundAmount);
     }

@@ -417,10 +417,14 @@ describe("CrashGamePvP", function () {
       // Now disable ETH acceptance to simulate push payment failure
       await revertingContract.setAcceptETH(false);
       
-      // Cancel match - push will fail; tx should revert
+      // Cancel match - push will fail; fallback credits pull balance instead of reverting
       await expect(
         revertingContract.cancelMatch(await escrow.getAddress(), revertingMatchId)
-      ).to.be.reverted;
+      ).to.not.be.reverted;
+
+      // Verify credited balance equals the original wager
+      const credited = await escrow.userBalance(await revertingContract.getAddress());
+      expect(credited).to.equal(wagerAmount);
     });
   });
 
@@ -1059,6 +1063,56 @@ describe("CrashGamePvP", function () {
 
       expect(await escrow.referralBalances(player3.address)).to.equal(half);
       expect(await escrow.referralBalances(owner.address)).to.equal(half);
+    });
+
+    it("emits ReferralPaid events when allocating referral balances", async function () {
+      await escrow.connect(owner).setFeePercent(10); // ensure fee covers pool
+
+      const wagerAmount = ethers.parseEther("1");
+      const { sig: sigA, deadline: dl } = await signApprovalFor(player1.address, wagerAmount);
+      const tx = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](player3.address, dl, sigA, { value: wagerAmount });
+      const rc = await tx.wait();
+      const event = rc?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const matchId = escrow.interface.parseLog({ topics: event!.topics as string[], data: event!.data })?.args[0] as bigint;
+
+      // Player2 joins with referrer owner
+      await joinWithApproval(player2, matchId, player1.address, wagerAmount, owner.address);
+
+      // Settle and capture events
+      const settleRc = await (await escrow.connect(oracle).settleMatch(matchId, player1.address)).wait();
+
+      // Compute expected referral split
+      const totalDeposit = wagerAmount * 2n;
+      const referralPool = (totalDeposit * 50n) / 10_000n; // 0.5%
+      const half = referralPool / 2n;
+
+      // Find ReferralPaid events
+      const referralEvents = settleRc!.logs
+        .map((log) => {
+          try { return escrow.interface.parseLog({ topics: log.topics as string[], data: log.data }); } catch { return null; }
+        })
+        .filter((p) => p && p!.name === "ReferralPaid");
+
+      expect(referralEvents.length).to.equal(2);
+      const [e1, e2] = referralEvents as any[];
+      const args1 = e1.args as any;
+      const args2 = e2.args as any;
+
+      // Each referrer gets half
+      const refs = [args1[0] as string, args2[0] as string];
+      const amts = [args1[2] as bigint, args2[2] as bigint];
+      expect(refs).to.have.members([player3.address, owner.address]);
+      expect(amts[0]).to.equal(half);
+      expect(amts[1]).to.equal(half);
     });
   });
 
