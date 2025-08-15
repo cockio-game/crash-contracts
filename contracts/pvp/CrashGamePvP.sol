@@ -192,6 +192,53 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     }
 
     /**
+     * @dev Oracle-only: Merge two awaiting matches into one active match by pairing
+     *      source.playerA as target.playerB. Requires equal wagers; no new deposits.
+     *      Source match is closed with no refund; its deposit is added to target's totalDeposit.
+     */
+    function mergeAwaitingMatches(uint256 sourceId, uint256 targetId)
+        external
+        onlyOracle
+        nonReentrant
+    {
+        require(sourceId != targetId, "Invalid ids");
+        Match storage src = matches[sourceId];
+        Match storage dst = matches[targetId];
+
+        require(src.status == MatchStatus.AwaitingOpponent, "Source not awaiting");
+        require(dst.status == MatchStatus.AwaitingOpponent, "Target not awaiting");
+        require(src.playerA != address(0) && dst.playerA != address(0), "Invalid players");
+        require(src.wagerAmount == dst.wagerAmount, "Wager mismatch");
+        require(dst.playerB == address(0), "Target has opponent");
+
+        // Sanity: active pointers must match ids (prevents merging stale entries)
+        require(activeMatchOf[src.playerA] == sourceId, "Source pointer mismatch");
+        require(activeMatchOf[dst.playerA] == targetId, "Target pointer mismatch");
+
+        // ensure fee/referral snapshots align to avoid confusion
+        require(src.feeAtCreate == dst.feeAtCreate, "Fee snapshot mismatch");
+        require(src.referralFeeAtCreate == dst.referralFeeAtCreate, "Referral snapshot mismatch");
+
+        // Move source's deposit to target and pair players
+        address srcA = src.playerA;
+        dst.playerB = srcA;
+        dst.totalDeposit += src.totalDeposit; // add source deposit, no new funds are sent
+        dst.status = MatchStatus.Active;
+        dst.activeAt = block.timestamp;
+
+        // Update active match pointer for source player to point at target
+        activeMatchOf[srcA] = targetId;
+
+        // Close source without refund; zero out to avoid any accidental accounting
+        src.totalDeposit = 0;
+        src.status = MatchStatus.Settled; // mark closed; no payouts/refunds from source
+        src.playerA = address(0);
+
+        // Emit events mirroring a normal join and a source close
+        emit MatchReady(targetId, dst.playerA, dst.playerB);
+    }
+
+    /**
      * @dev Oracle settles the match
      * @param matchId Match to settle
      * @param winner Winner address (must be one of the two players)

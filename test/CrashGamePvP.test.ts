@@ -708,6 +708,121 @@ describe("CrashGamePvP", function () {
     });
   });
 
+  describe("Oracle merge awaiting matches", function () {
+    it("merges two awaiting hosts into an active target without extra deposit or refund", async function () {
+      const wager = ethers.parseEther("1");
+
+      // Player1 creates source match
+      const { sig: sigA, deadline: dlA } = await signApprovalFor(player1.address, wager);
+      const txA = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlA, sigA, { value: wager });
+      const rcA = await txA.wait();
+      const evA = rcA?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const sourceId = escrow.interface.parseLog({ topics: evA!.topics as string[], data: evA!.data })
+        ?.args[0] as bigint;
+
+      // Player2 creates target match
+      const { sig: sigB, deadline: dlB } = await signApprovalFor(player2.address, wager);
+      const txB = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlB, sigB, { value: wager });
+      const rcB = await txB.wait();
+      const evB = rcB?.logs.find((log) => {
+        try {
+          const parsed = escrow.interface.parseLog({ topics: log.topics as string[], data: log.data });
+          return parsed?.name === "MatchCreated";
+        } catch {
+          return false;
+        }
+      });
+      const targetId = escrow.interface.parseLog({ topics: evB!.topics as string[], data: evB!.data })
+        ?.args[0] as bigint;
+
+      // Oracle merges A -> B
+      await escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId);
+
+      const target = await escrow.matches(targetId);
+      expect(target.status).to.equal(2); // Active
+      expect(target.playerA).to.equal(player2.address);
+      expect(target.playerB).to.equal(player1.address);
+      expect(target.totalDeposit).to.equal(wager * 2n);
+
+      const source = await escrow.matches(sourceId);
+      expect(source.status).to.equal(3); // Settled (closed)
+      expect(source.totalDeposit).to.equal(0n);
+
+      // No refunds were credited to source creator
+      expect(await escrow.userBalance(player1.address)).to.equal(0n);
+
+      // Active match pointers updated
+      expect(await escrow.getActiveMatch(player1.address)).to.equal(targetId);
+      expect(await escrow.getActiveMatch(player2.address)).to.equal(targetId);
+    });
+
+    it("reverts for non-oracle", async function () {
+      const wager = ethers.parseEther("1");
+
+      const { sig: sigA, deadline: dlA } = await signApprovalFor(player1.address, wager);
+      const txA = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlA, sigA, { value: wager });
+      const rcA = await txA.wait();
+      const sourceId = escrow.interface.parseLog({ topics: rcA!.logs[0].topics as string[], data: rcA!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      const { sig: sigB, deadline: dlB } = await signApprovalFor(player2.address, wager);
+      const txB = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlB, sigB, { value: wager });
+      const rcB = await txB.wait();
+      const targetId = escrow.interface.parseLog({ topics: rcB!.logs[0].topics as string[], data: rcB!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      await expect(
+        escrow.connect(player1).mergeAwaitingMatches(sourceId, targetId)
+      ).to.be.revertedWith("Only oracle");
+    });
+
+    it("reverts when wagers mismatch or matches not awaiting", async function () {
+      const w1 = ethers.parseEther("1");
+      const w2 = ethers.parseEther("2");
+
+      const { sig: sigA, deadline: dlA } = await signApprovalFor(player1.address, w1);
+      const txA = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlA, sigA, { value: w1 });
+      const rcA = await txA.wait();
+      const sourceId = escrow.interface.parseLog({ topics: rcA!.logs[0].topics as string[], data: rcA!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      const { sig: sigB, deadline: dlB } = await signApprovalFor(player2.address, w2);
+      const txB = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlB, sigB, { value: w2 });
+      const rcB = await txB.wait();
+      const targetId = escrow.interface.parseLog({ topics: rcB!.logs[0].topics as string[], data: rcB!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      await expect(
+        escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
+      ).to.be.revertedWith("Wager mismatch");
+
+      // Make target active and ensure merging fails due to state
+      await escrow.connect(player3)["joinMatch(uint256,address,uint256,address)"](targetId, player2.address, w2, ethers.ZeroAddress, { value: w2 });
+      await expect(
+        escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
+      ).to.be.revertedWith("Target not awaiting");
+    });
+  });
+
   describe("Referrals", function () {
 
     it("splits referral pool equally when both players have referrers", async function () {
