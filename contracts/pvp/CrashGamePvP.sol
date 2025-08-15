@@ -162,15 +162,21 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
      * @param expectedWager Expected wager amount to prevent front-running
      */
     /**
-     * @dev Join an existing match as playerB, optionally passing a referrer (use address(0) for none)
+     * @dev Join an existing match as playerB, optionally passing a referrer (use address(0) for none).
+     *      Requires an EIP-712 oracle approval for the joiner's bet-size.
      */
     function joinMatch(
         uint256 matchId,
         address expectedOpponent,
         uint256 expectedWager,
-        address referrer
+        address referrer,
+        uint256 deadline,
+        bytes calldata sig
     ) external payable nonReentrant {
         Match storage matchData = matches[matchId];
+
+        // Enforce per-joiner bet-size approval by oracle
+        _verifyBetApproval(msg.sender, msg.value, deadline, sig);
 
         require(matchData.status == MatchStatus.AwaitingOpponent, "Match not awaiting opponent");
         require(msg.sender != matchData.playerA, "Cannot play yourself");

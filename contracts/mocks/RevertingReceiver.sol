@@ -46,6 +46,30 @@ contract RevertingReceiver {
         );
         require(success, "Join match failed");
     }
+
+    // New helper matching the updated join signature that requires EIP-712 approval
+    function joinMatchWithApproval(
+        address escrow,
+        uint256 matchId,
+        address expectedOpponent,
+        uint256 expectedWager,
+        address referrer,
+        uint256 deadline,
+        bytes calldata sig
+    ) external {
+        (bool success, ) = escrow.call{value: expectedWager}(
+            abi.encodeWithSignature(
+                "joinMatch(uint256,address,uint256,address,uint256,bytes)",
+                matchId,
+                expectedOpponent,
+                expectedWager,
+                referrer,
+                deadline,
+                sig
+            )
+        );
+        require(success, "Join match failed");
+    }
     
     // Function to create a match (no-referrer) with explicit approval deadline
     function createMatch(address escrow, bytes memory sig, uint256 deadline) external payable returns (uint256) {
