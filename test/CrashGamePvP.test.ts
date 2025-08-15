@@ -821,6 +821,47 @@ describe("CrashGamePvP", function () {
         escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
       ).to.be.revertedWith("Target not awaiting");
     });
+
+    it("merges when within tolerance and equalizes pot to min with credits", async function () {
+      // Set tolerance to 10 bps (0.1%)
+      await escrow.connect(owner).setMergeToleranceBp(10);
+
+      const base = ethers.parseEther("0.001"); // 1e15 wei
+      const drift = 10n ** 12n; // 1e12 wei (~0.1% of base)
+
+      // Source has slightly higher wager than target
+      const { sig: sigS, deadline: dlS } = await signApprovalFor(player1.address, base + drift);
+      const txS = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlS, sigS, { value: base + drift });
+      const rcS = await txS.wait();
+      const sourceId = escrow.interface.parseLog({ topics: rcS!.logs[0].topics as string[], data: rcS!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      const { sig: sigT, deadline: dlT } = await signApprovalFor(player2.address, base);
+      const txT = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlT, sigT, { value: base });
+      const rcT = await txT.wait();
+      const targetId = escrow.interface.parseLog({ topics: rcT!.logs[0].topics as string[], data: rcT!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      // Merge should succeed and credit the overage back to source player
+      await escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId);
+
+      const target = await escrow.matches(targetId);
+      expect(target.status).to.equal(2); // Active
+      expect(target.wagerAmount).to.equal(base); // min
+      expect(target.totalDeposit).to.equal(base * 2n);
+
+      // Source gets credited the drift
+      expect(await escrow.userBalance(player1.address)).to.equal(drift);
+
+      // Source closed and zeroed
+      const source = await escrow.matches(sourceId);
+      expect(source.status).to.equal(3);
+      expect(source.totalDeposit).to.equal(0n);
+    });
   });
 
   describe("Referrals", function () {
@@ -975,6 +1016,82 @@ describe("CrashGamePvP", function () {
 
       expect(await escrow.referralBalances(player3.address)).to.equal(half);
       expect(await escrow.referralBalances(owner.address)).to.equal(half);
+    });
+  });
+
+  describe("Merge Tolerance Config", function () {
+    it("defaults to 0 bps", async function () {
+      const tol = await escrow.mergeToleranceBp();
+      expect(tol).to.equal(0);
+    });
+
+    it("allows merging within 1% tolerance when set", async function () {
+      // Set tolerance to 1% (100 bps)
+      await escrow.connect(owner).setMergeToleranceBp(100);
+
+      const base = ethers.parseEther("0.001"); // 1e15 wei
+      const drift = 10n ** 13n; // 1% of base
+
+      // Source has slightly higher wager than target (within 1%)
+      const { sig: sigS, deadline: dlS } = await signApprovalFor(player1.address, base + drift);
+      const txS = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlS, sigS, { value: base + drift });
+      const rcS = await txS.wait();
+      const sourceId = escrow.interface.parseLog({ topics: rcS!.logs[0].topics as string[], data: rcS!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      const { sig: sigT, deadline: dlT } = await signApprovalFor(player2.address, base);
+      const txT = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlT, sigT, { value: base });
+      const rcT = await txT.wait();
+      const targetId = escrow.interface.parseLog({ topics: rcT!.logs[0].topics as string[], data: rcT!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      // Merge should succeed and equalize pot to min (base)
+      await escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId);
+
+      const target = await escrow.matches(targetId);
+      expect(target.status).to.equal(2); // Active
+      expect(target.wagerAmount).to.equal(base); // min
+      expect(target.totalDeposit).to.equal(base * 2n);
+
+      // Source gets credited the drift
+      expect(await escrow.userBalance(player1.address)).to.equal(drift);
+    });
+
+    it("reverts merging above 1% tolerance", async function () {
+      await escrow.connect(owner).setMergeToleranceBp(100);
+
+      const base = ethers.parseEther("0.001"); // 1e15 wei
+      const drift = base / 50n; // 2% of base, safely above 1%
+
+      const { sig: sigS, deadline: dlS } = await signApprovalFor(player1.address, base + drift);
+      const txS = await escrow
+        .connect(player1)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlS, sigS, { value: base + drift });
+      const rcS = await txS.wait();
+      const sourceId = escrow.interface.parseLog({ topics: rcS!.logs[0].topics as string[], data: rcS!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      const { sig: sigT, deadline: dlT } = await signApprovalFor(player2.address, base);
+      const txT = await escrow
+        .connect(player2)
+        ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dlT, sigT, { value: base });
+      const rcT = await txT.wait();
+      const targetId = escrow.interface.parseLog({ topics: rcT!.logs[0].topics as string[], data: rcT!.logs[0].data })
+        ?.args?.[0] as bigint;
+
+      await expect(
+        escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
+      ).to.be.revertedWith("Wager mismatch");
+    });
+
+    it("caps tolerance at 5% (500 bps)", async function () {
+      await expect(
+        escrow.connect(owner).setMergeToleranceBp(501)
+      ).to.be.revertedWith("Tolerance too high");
     });
   });
 });

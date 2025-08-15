@@ -80,6 +80,10 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     // Pull-payment balance for referrers (credited from platform fees)
     mapping(address => uint256) public referralBalances;
 
+    // Tolerance for merging awaiting matches with slightly different wagers (in basis points of the larger wager)
+    // Default 0 = exact-match required.
+    uint16 public mergeToleranceBp = 0;
+
     // --- Events ---
     event MatchCreated(uint256 indexed matchId, address indexed playerA, uint256 wagerAmount);
     event MatchReady(uint256 indexed matchId, address indexed playerA, address indexed playerB);
@@ -195,6 +199,7 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
      * @dev Oracle-only: Merge two awaiting matches into one active match by pairing
      *      source.playerA as target.playerB. Requires equal wagers; no new deposits.
      *      Source match is closed with no refund; its deposit is added to target's totalDeposit.
+     *      Merged match wagers can be a bit off so we "equalize" the wager amounts to ensure probability is always equal
      */
     function mergeAwaitingMatches(uint256 sourceId, uint256 targetId)
         external
@@ -208,7 +213,14 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
         require(src.status == MatchStatus.AwaitingOpponent, "Source not awaiting");
         require(dst.status == MatchStatus.AwaitingOpponent, "Target not awaiting");
         require(src.playerA != address(0) && dst.playerA != address(0), "Invalid players");
-        require(src.wagerAmount == dst.wagerAmount, "Wager mismatch");
+
+        // Allow small drift based on configurable mergeToleranceBp
+        uint256 wA = src.wagerAmount;
+        uint256 wB = dst.wagerAmount;
+        uint256 maxW = wA >= wB ? wA : wB;
+        uint256 minW = wA >= wB ? wB : wA;
+        uint256 diff = maxW - minW;
+        require(diff * BP_DENOM <= maxW * mergeToleranceBp, "Wager mismatch");
         require(dst.playerB == address(0), "Target has opponent");
 
         // Sanity: active pointers must match ids (prevents merging stale entries)
@@ -219,10 +231,28 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
         require(src.feeAtCreate == dst.feeAtCreate, "Fee snapshot mismatch");
         require(src.referralFeeAtCreate == dst.referralFeeAtCreate, "Referral snapshot mismatch");
 
-        // Move source's deposit to target and pair players
+        // Equalize stakes to minW by crediting any overage back to the heavier depositor(s)
+        // and setting the target match's wagerAmount to minW.
         address srcA = src.playerA;
+        // If target's wager is higher, reduce target's deposit and credit back the difference
+        if (wB > minW) {
+            uint256 deltaB = wB - minW;
+            dst.totalDeposit -= deltaB;
+            userBalance[dst.playerA] += deltaB;
+            emit BalanceCredited(dst.playerA, deltaB, targetId);
+        }
+        // If source's wager is higher, credit back the difference to source and only add minW
+        uint256 addedFromSrc = minW;
+        if (wA > minW) {
+            uint256 deltaA = wA - minW;
+            userBalance[srcA] += deltaA;
+            emit BalanceCredited(srcA, deltaA, sourceId);
+        }
+
+        // Pair players and finalize target as active with equalized pot
         dst.playerB = srcA;
-        dst.totalDeposit += src.totalDeposit; // add source deposit, no new funds are sent
+        dst.totalDeposit += addedFromSrc; // now equals minW (possibly adjusted) + minW = 2*minW
+        dst.wagerAmount = minW;
         dst.status = MatchStatus.Active;
         dst.activeAt = block.timestamp;
 
@@ -499,6 +529,17 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     }
 
     // --- Referral Functions ---
+    
+    /**
+     * @dev Owner sets allowed merge tolerance for wager mismatches in basis points (max 5%).
+     */
+    event MergeToleranceChanged(uint16 oldBp, uint16 newBp);
+    function setMergeToleranceBp(uint16 newBp) external onlyOwner {
+        require(newBp <= 500, "Tolerance too high"); // cap at 5%
+        uint16 old = mergeToleranceBp;
+        mergeToleranceBp = newBp;
+        emit MergeToleranceChanged(old, newBp);
+    }
 
     /**
      * @dev Allows a referrer to withdraw their accumulated referral balance.
