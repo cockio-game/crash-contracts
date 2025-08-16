@@ -42,11 +42,26 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     const contractAddress = await contract.getAddress();
     console.log(`✅ ${artifact.contractName} deployed to => ${contractAddress}`);
 
-    // --- 5. Wait for block explorer to index the transaction ---
+    // --- 5. Configure merge tolerance to 1% (100 bps) ---
+    try {
+        const currentTol: bigint = await (contract as any).mergeToleranceBp();
+        if (currentTol !== 100n) {
+            console.log("\n⚙️  Setting mergeToleranceBp to 1% (100 bps)...");
+            const tx = await (contract as any).setMergeToleranceBp(100);
+            await tx.wait();
+            console.log("✅ mergeToleranceBp set to 100 bps");
+        } else {
+            console.log("\nℹ️  mergeToleranceBp already set to 100 bps");
+        }
+    } catch (e) {
+        console.log("\n⚠️  Could not set mergeToleranceBp automatically (continuing). Error:", e);
+    }
+
+    // --- 6. Wait for block explorer to index the transaction ---
     console.log("\n⏳ Waiting 15 seconds for block finalization before verification...");
     await new Promise(r => setTimeout(r, 15_000));
 
-    // --- 6. Verify the contract on the block explorer ---
+    // --- 7. Verify the contract on the block explorer ---
     console.log("🕵️ Verifying contract on the block explorer...");
     try {
         await hre.run("verify:verify", {
