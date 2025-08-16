@@ -2,8 +2,8 @@
 
 ## Overview
 This document provides technical documentation for the Crash Game smart contracts deployed on Abstract testnet. The system consists of two main contracts:
-1. **CrashSteps.sol** - Single-player crash game with step-based progression
-2. **CrashGamePvP.sol** - Player vs Player variant with matched betting
+1. `contracts/CrashSteps.sol` — Single-player crash game with step-based progression
+2. `contracts/pvp/CrashGamePvP.sol` — Player vs Player escrow with matched betting
 
 ## Contract: CrashSteps.sol
 
@@ -52,8 +52,18 @@ A provably fair crash gambling game where players deposit ETH and attempt to cas
 - Uses pull payment pattern for failed push payments
 
 **calculateCap(uint256 netStake)**
-- Pure function calculating maximum payout for a stake
-- Returns (netStake * maxPayoutFactorBp) / 10000
+- View function calculating maximum payout for a stake
+- Returns `(netStake * maxPayoutFactorBp) / 10000`
+
+#### Admin Functions
+- `rotateOracle(address newOracle)` — updates the oracle signer
+- `setMaxPayoutFactorBp(uint32 newFactorBp)` — set cap multiplier (1×–150×)
+- `setPlatformFeeBp(uint16 newFeeBp)` — max 10%
+- `setReferralFeeBp(uint16 newBp)` — max 10%
+- `setDepositLimits(uint256 newMin, uint256 newMax)`
+- `setRiskBurstBp(uint32 newBp)` — bankroll risk budgeting
+- `pause()` / `unpause()` — gate `deposit/claim/forfeit`
+- `withdraw(uint256 amount)` / `withdrawAll()` — owner may withdraw only the current surplus (contract balance minus totalLiability)
 
 ### Security Considerations
 
@@ -75,72 +85,103 @@ A provably fair crash gambling game where players deposit ETH and attempt to cas
 ## Contract: CrashGamePvP.sol
 
 ### Purpose
-A competitive PvP variant where two players with matched wagers compete. Both players choose how many steps to attempt each round. The last player standing wins the entire pot (minus fees).
+PvP escrow for matched bets between two players. Reduces transactions by combining match creation with the initial deposit, enforces at most one active match per player, and uses pull‑payments for payouts and referral rewards to prevent DoS.
 
-### Key Components
+### Match Status
+- None: Match does not exist
+- AwaitingOpponent: Player A deposited; waiting for Player B
+- Active: Both players deposited; game active
+- Settled: Oracle settled the match; winnings credited to pull-payment
+- Refunded: Match canceled and funds refunded/credited
 
-#### State Variables
-- owner: Contract owner address
-- currentMatchId: Counter for unique match IDs
-- matches: Mapping of match data by ID
-- playerActiveMatch: Tracks active match per player
-- FEE_PERCENTAGE: Platform fee (5%)
+### Storage (key items)
+- `owner`: Contract owner
+- `oracleAddress`: Address authorized to approve bets, settle, and cancel
+- `matchCounter`: Sequential counter for match IDs
+- `mapping(uint256 => Match) matches`: Match data by `matchId`
+- `mapping(address => uint256) activeMatchOf`: One active match per player (0 = none)
+- `mapping(address => uint256) userBalance`: Aggregated pull‑payment credits (winnings/refunds)
+- `mapping(address => uint256) referralBalances`: Pull‑payment credits for referrers
+- `mapping(address => uint256) feeClaimable`: Accrued platform fees (owner)
+- `uint256 feePercent`: Current fee percentage (capped by `MAX_FEE_PERCENT = 10`)
+- `uint16 referralFeeBp`: Referral fee in basis points (default 50 = 0.5%)
+- `uint16 mergeToleranceBp`: Allowed wager mismatch for merging awaiting matches (default 0; max 5%)
+- `uint256 approvalVersion`: Version to invalidate prior EIP‑712 bet approvals
 
-#### Match States
-Created,    // Match created, waiting for player B
-Deposited,  // Both players deposited, ready to play
-Active,     // Game in progress
-Completed   // Game finished, winner determined
+### Events
+- `MatchCreated(uint256 matchId, address playerA, uint256 wagerAmount)`
+- `MatchReady(uint256 matchId, address playerA, address playerB)`
+- `MatchSettled(uint256 matchId, address winner, uint256 payout)`
+- `MatchRefunded(uint256 matchId, address player, uint256 amount)`
+- `MatchCanceled(uint256 matchId, address playerA, address playerB)`
+- `BalanceCredited(address user, uint256 amount, uint256 matchId)`
+- `BalanceWithdrawn(address user, uint256 amount)`
+- `FeePercentUpdated(uint256 oldFee, uint256 newFee)`
+- `FeeWithdrawn(address to, uint256 amount)`
+- `OracleUpdated(address oldOracle, address newOracle)`
+- `ReferralFeeChanged(uint16 oldBp, uint16 newBp)`
+- `ReferralPaid(address referrer, address player, uint256 amount)`
+- `MergeToleranceChanged(uint16 oldBp, uint16 newBp)`
 
-#### Core Functions
+### Core Functions
 
-**createMatch(uint256 _wagerAmount)**
-- Player A creates match with specified wager
-- Deposits wager via msg.value
-- Validates minimum bet and no active matches
-- Returns unique matchId
+Creation and joining
+- `createMatch(address referrer, uint256 deadline, bytes sig) external payable returns (uint256 matchId)`
+  - Requires `activeMatchOf[msg.sender] == 0`
+  - Requires a valid oracle EIP‑712 approval for the exact `msg.value`
+    - Domain: `EIP712("CrashGamePvP","1")`
+    - Typehash: `BetApproval(address player,uint256 version,uint256 amount,uint256 deadline)`
+  - Snapshots `feePercent` and `referralFeeBp` into the match; sets sticky `referrer`
 
-**joinMatch(bytes32 _matchId, address _playerA, uint256 _wagerAmount)**
-- Player B joins existing match
-- Must match exact wager amount
-- Deposits via msg.value
-- Changes status to Deposited
+- `joinMatch(uint256 matchId, address expectedOpponent, uint256 expectedWager, address referrer, uint256 deadline, bytes sig) external payable`
+  - Requires `matches[matchId].status == AwaitingOpponent`
+  - Requires `msg.value == expectedWager == matches[matchId].wagerAmount`
+  - Optional front‑run protection via `expectedOpponent`
+  - Requires `activeMatchOf[msg.sender] == 0`
+  - Requires a valid oracle EIP‑712 approval for the joiner’s `msg.value`; sets sticky `referrer`
 
-**settleMatch(bytes32 _matchId, address _winner, uint256 _stepsA, uint256 _stepsB)**
-- Only callable by authorized game server
-- Determines winner and calculates payout
-- Updates match status to Completed
+Merging
+- `mergeAwaitingMatches(uint256 sourceId, uint256 targetId) external onlyOracle`
+  - Pairs two `AwaitingOpponent` matches into one `Active` match
+  - Allows small wager drift up to `mergeToleranceBp`; credits any overage back to players’ `userBalance`
 
-**claimReward(bytes32 _matchId)**
-- Winner claims their payout
-- Validates caller is the winner
-- Prevents double-claiming
-- Transfers winnings
+Settlement and cancellation
+- `settleMatch(uint256 matchId, address winner) external onlyOracle`
+  - Draw (`winner == address(0)`): marks Refunded; clears both active slots; credits both players their full wager; no fee charged
+  - Winner path: charges `fee = totalDeposit * feeAtCreate / 100`, allocates referral rewards from the fee (never from player pot), credits `userBalance[winner]` with net pot, accrues remaining fee into `feeClaimable[owner]`
 
-**cancelMatch(bytes32 _matchId)**
-- Allows match creator to cancel before player B joins
-- Full refund of wager
-- Only works in Created state
+- `cancelMyMatch(uint256 matchId) external`
+  - Only Player A; only while `AwaitingOpponent`
+  - Attempts direct push refund; on failure credits `userBalance`
 
-### Security Considerations
+- `cancelMatch(uint256 matchId) external onlyOracle`
+  - Only `AwaitingOpponent`; credits Player A’s deposit to `userBalance[playerA]`
 
-1. **Server Authorization**: Only authorized server can settle matches via onlyGameServer modifier
-2. **Double-Spend Prevention**: playerActiveMatch ensures one match per player
-3. **Exact Wager Matching**: Player B must match exact wager amount
-4. **State Machine**: Strict state transitions prevent invalid operations
-5. **Claim Validation**: Multiple checks ensure only winner can claim
-6. **Reentrancy**: CEI pattern in all payment functions
+Withdrawals and admin
+- `withdraw()` — player withdraws their entire aggregated balance (`userBalance[msg.sender]` is set to 0)
+- `withdrawReferralBalance()` — referrers withdraw accumulated referral rewards
+- `withdrawFees(address to) onlyOwner` — owner withdraws accumulated fees
+- `setFeePercent(uint256 newFeePercent) onlyOwner` — max 10%
+- `setOracle(address newOracle) onlyOwner`
+- `setApprovalVersion(uint256 newVersion) onlyOwner` — invalidate older bet approvals
+- `setMergeToleranceBp(uint16 newBp) onlyOwner` — max 500 (5%)
+- `setReferralFeeBp(uint16 newBp) onlyOwner` — max 1,000 (10%)
 
-### PvP Game Flow
-1. Player A creates match with wager
-2. Player B joins with matching wager
-3. Off-chain game server manages gameplay
-4. Server calls settleMatch() with results
-5. Winner calls claimReward() to collect pot
+### Views
+- `getMatch(uint256 matchId)` — returns playerA, playerB, wagerAmount, totalDeposit, status, createdAt, activeAt
+- `getActiveMatch(address player)` — returns the player’s active `matchId` (0 if none)
+- Public getters for mappings: `userBalance(address)`, `referralBalances(address)`, etc.
 
-### Fee Structure
-- 5% platform fee on all payouts
-- Winner receives: (wagerA + wagerB) * 0.95
+### ID Format and Migration Notes
+- Match IDs are now `uint256` (previously `bytes32`). IDs are sequential (`matchId = ++matchCounter`).
+- Update app/ABIs to pass/read `uint256`/BigInt.
+- Store `matchId` in your DB as a decimal string (`matchId.toString()`) to avoid JSON BigInt issues.
+- Do not pre-generate IDs off-chain. Create on-chain first, then read `matchId` from the `MatchCreated` event in the receipt.
+
+### Design Note: Active Matches and History
+- The contract intentionally tracks only active matches on-chain. When a match settles or is canceled, it remains in `matches[matchId]` with its final status.
+- History per player is not enumerated on-chain. Index and query history off-chain using events (`MatchCreated/Ready/Settled/Refunded/Canceled`).
+- With `MAX_ACTIVE_MATCHES = 1`, use `getActiveMatch(address)` to read a player’s current match (or 0 if none). If you later allow multiple concurrent matches per player, prefer pagination-friendly views or rely on events rather than returning large arrays on-chain.
 
 ---
 
@@ -148,7 +189,6 @@ Completed   // Game finished, winner determined
 
 Both contracts implement:
 1. **Checks-Effects-Interactions**: State changes before external calls
-2. **Pull Payment**: Users must claim winnings (not pushed automatically)
-3. **Minimum Wager**: 0.0001 ETH to prevent dust/spam
-4. **Event Emission**: All critical actions emit events for monitoring
-5. **Explicit State Management**: Clear game/match status tracking
+2. **Pull Payment**: PvP winnings/refunds always via `userBalance` withdrawal; CrashSteps referral payouts fall back to pull on push failure
+3. **Event Emission**: All critical actions emit events for monitoring
+4. **Explicit State Management**: Clear game/match status tracking
