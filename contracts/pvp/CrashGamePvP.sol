@@ -95,7 +95,7 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     event BalanceWithdrawn(address indexed user, uint256 amount);
     event FeeWithdrawn(address indexed to, uint256 amount);
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
-    // Referral events/config
+    event MergeToleranceChanged(uint16 oldBp, uint16 newBp);
     event ReferralFeeChanged(uint16 oldBp, uint16 newBp);
     event ReferralPaid(address indexed referrer, address indexed player, uint256 amount);
 
@@ -549,7 +549,6 @@ contract CrashGamePvP is ReentrancyGuard, EIP712 {
     /**
      * @dev Owner sets allowed merge tolerance for wager mismatches in basis points (max 5%).
      */
-    event MergeToleranceChanged(uint16 oldBp, uint16 newBp);
     function setMergeToleranceBp(uint16 newBp) external onlyOwner {
         require(newBp <= 500, "Tolerance too high"); // cap at 5%
         uint16 old = mergeToleranceBp;
