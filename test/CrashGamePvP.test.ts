@@ -190,7 +190,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player1)
           ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, dl3, sig3, { value: wagerAmount })
-      ).to.be.revertedWith("Already in active match");
+      ).to.be.revertedWithCustomError(escrow, "AlreadyInActiveMatch");
     });
   });
 
@@ -241,7 +241,7 @@ describe("CrashGamePvP", function () {
           (await signApprovalFor(player1.address, wagerAmount)).sig,
           { value: wagerAmount }
         )
-      ).to.be.revertedWith("Cannot play yourself");
+      ).to.be.revertedWithCustomError(escrow, "CannotPlaySelf");
     });
 
     it("Should require correct wager amount", async function () {
@@ -257,7 +257,7 @@ describe("CrashGamePvP", function () {
           (await signApprovalFor(player2.address, wrongAmount)).sig,
           { value: wrongAmount }
         )
-      ).to.be.revertedWith("Wrong wager amount");
+      ).to.be.revertedWithCustomError(escrow, "WrongWagerAmount");
     });
   });
 
@@ -306,7 +306,7 @@ describe("CrashGamePvP", function () {
       expect(balanceAfter).to.be.closeTo(balanceBefore + (wagerAmount * 2n) - gasUsed, ethers.parseEther("0.001"));
       
       // Verify can't withdraw twice
-      await expect(escrow.connect(player1).withdraw()).to.be.revertedWith("Nothing to withdraw");
+      await expect(escrow.connect(player1).withdraw()).to.be.revertedWithCustomError(escrow, "NothingToWithdraw");
     });
 
     it("Should treat zero address winner as draw and refund both", async function () {
@@ -327,13 +327,13 @@ describe("CrashGamePvP", function () {
       const randomAddress = ethers.Wallet.createRandom().address;
       await expect(
         escrow.connect(oracle).settleMatch(matchId, randomAddress)
-      ).to.be.revertedWith("Invalid winner");
+      ).to.be.revertedWithCustomError(escrow, "InvalidWinner");
     });
 
     it("Should only allow oracle to settle matches", async function () {
       await expect(
         escrow.connect(player1).settleMatch(matchId, player1.address)
-      ).to.be.revertedWith("Only oracle");
+      ).to.be.revertedWithCustomError(escrow, "OnlyOracle");
     });
   });
 
@@ -389,7 +389,7 @@ describe("CrashGamePvP", function () {
     it("Should not allow non-creator to cancel match", async function () {
       await expect(
         escrow.connect(player2).cancelMyMatch(matchId)
-      ).to.be.revertedWith("Not your match");
+      ).to.be.revertedWithCustomError(escrow, "NotYourMatch");
     });
 
     it("Should fallback to pull payment if push fails", async function () {
@@ -545,9 +545,9 @@ describe("CrashGamePvP", function () {
           data: event!.data 
         })?.args[0] as bigint;
         
-        // Verify fee was snapshotted at 0
+        // Verify fee (bps) was snapshotted at 0
         const match = await escrow.matches(matchId);
-        expect(match.feeAtCreate).to.equal(0);
+        expect(match.feeBpAtCreate).to.equal(0);
         
         // Owner changes fee to 10%
         await escrow.connect(owner).setFeePercent(10);
@@ -644,7 +644,7 @@ describe("CrashGamePvP", function () {
       
       // Oracle cannot cancel active match (no timeout functionality anymore)
       await expect(escrow.connect(oracle).cancelMatch(matchId))
-        .to.be.revertedWith("Can only cancel awaiting matches");
+        .to.be.revertedWithCustomError(escrow, "MatchNotAwaitingOpponent");
     });
     
     it("Should allow oracle to cancel awaiting-opponent match", async function () {
@@ -691,12 +691,12 @@ describe("CrashGamePvP", function () {
     
     it("Should not allow non-owner to set oracle", async function () {
       await expect(escrow.connect(player1).setOracle(player3.address))
-        .to.be.revertedWith("Only owner");
+        .to.be.revertedWithCustomError(escrow, "OnlyOwner");
     });
     
     it("Should not allow zero address as oracle", async function () {
       await expect(escrow.connect(owner).setOracle(ethers.ZeroAddress))
-        .to.be.revertedWith("Invalid oracle");
+        .to.be.revertedWithCustomError(escrow, "InvalidOracle");
     });
   });
 
@@ -720,7 +720,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player2)
           ["joinMatch(uint256,address,uint256,address,uint256,bytes)"](matchId, player1.address, wager, ethers.ZeroAddress, badDl, badSig, { value: wager })
-      ).to.be.revertedWith("Bet not approved");
+      ).to.be.revertedWithCustomError(escrow, "BetNotApproved");
     });
   });
 
@@ -733,7 +733,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player1)
           ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount })
-      ).to.be.revertedWith("Bet not approved");
+      ).to.be.revertedWithCustomError(escrow, "BetNotApproved");
     });
 
     it("rejects expired approvals", async function () {
@@ -745,7 +745,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player1)
           ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wagerAmount })
-      ).to.be.revertedWith("Expired");
+      ).to.be.revertedWithCustomError(escrow, "Expired");
     });
 
     it("reverts when sent amount exceeds approved amount", async function () {
@@ -756,7 +756,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player1)
           ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: sent })
-      ).to.be.revertedWith("Bet not approved");
+      ).to.be.revertedWithCustomError(escrow, "BetNotApproved");
     });
 
     it("reverts when sent amount is less than approved amount", async function () {
@@ -767,7 +767,7 @@ describe("CrashGamePvP", function () {
         escrow
           .connect(player1)
           ["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: sent })
-      ).to.be.revertedWith("Bet not approved");
+      ).to.be.revertedWithCustomError(escrow, "BetNotApproved");
     });
   });
 
@@ -851,7 +851,7 @@ describe("CrashGamePvP", function () {
 
       await expect(
         escrow.connect(player1).mergeAwaitingMatches(sourceId, targetId)
-      ).to.be.revertedWith("Only oracle");
+      ).to.be.revertedWithCustomError(escrow, "OnlyOracle");
     });
 
     it("reverts when wagers mismatch or matches not awaiting", async function () {
@@ -876,13 +876,13 @@ describe("CrashGamePvP", function () {
 
       await expect(
         escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
-      ).to.be.revertedWith("Wager mismatch");
+      ).to.be.revertedWithCustomError(escrow, "WagerMismatch");
 
       // Make target active and ensure merging fails due to state
       await joinWithApproval(player3, targetId, player2.address, w2, ethers.ZeroAddress);
       await expect(
         escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
-      ).to.be.revertedWith("Target not awaiting");
+      ).to.be.revertedWithCustomError(escrow, "MatchNotAwaitingOpponent");
     });
 
     it("merges when within tolerance and equalizes pot to min with credits", async function () {
@@ -1182,13 +1182,13 @@ describe("CrashGamePvP", function () {
 
       await expect(
         escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)
-      ).to.be.revertedWith("Wager mismatch");
+      ).to.be.revertedWithCustomError(escrow, "WagerMismatch");
     });
 
     it("caps tolerance at 5% (500 bps)", async function () {
       await expect(
         escrow.connect(owner).setMergeToleranceBp(501)
-      ).to.be.revertedWith("Tolerance too high");
+      ).to.be.revertedWithCustomError(escrow, "ToleranceTooHigh");
     });
   });
 
@@ -1215,7 +1215,7 @@ describe("CrashGamePvP", function () {
           (await signApprovalFor(player2.address, wager)).sig,
           { value: wager }
         )
-      ).to.be.revertedWith("Opponent mismatch");
+      ).to.be.revertedWithCustomError(escrow, "OpponentMismatch");
     });
 
     it("reverts when joiner already has an active match", async function () {
@@ -1243,7 +1243,7 @@ describe("CrashGamePvP", function () {
           (await signApprovalFor(player2.address, wager)).sig,
           { value: wager }
         )
-      ).to.be.revertedWith("Already in active match");
+      ).to.be.revertedWithCustomError(escrow, "AlreadyInActiveMatch");
     });
   });
 
@@ -1284,8 +1284,9 @@ describe("CrashGamePvP", function () {
       const targetId = escrow.interface.parseLog({ topics: rcB!.logs[0].topics as string[], data: rcB!.logs[0].data })
         ?.args?.[0] as bigint;
 
-      await expect(escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)).to.be.revertedWith(
-        "Fee snapshot mismatch"
+      await expect(escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)).to.be.revertedWithCustomError(
+        escrow,
+        "FeeSnapshotMismatch"
       );
     });
 
@@ -1308,8 +1309,9 @@ describe("CrashGamePvP", function () {
       const targetId = escrow.interface.parseLog({ topics: rcB!.logs[0].topics as string[], data: rcB!.logs[0].data })
         ?.args?.[0] as bigint;
 
-      await expect(escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)).to.be.revertedWith(
-        "Referral snapshot mismatch"
+      await expect(escrow.connect(oracle).mergeAwaitingMatches(sourceId, targetId)).to.be.revertedWithCustomError(
+        escrow,
+        "ReferralSnapshotMismatch"
       );
     });
   });
@@ -1380,7 +1382,7 @@ describe("CrashGamePvP", function () {
       await time.increase(2);
       await expect(
         escrow.connect(player1)["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, deadline, sig, { value: wager })
-      ).to.be.revertedWith("Expired");
+      ).to.be.revertedWithCustomError(escrow, "Expired");
     });
 
     it("invalidates old approvals on version bump and accepts new", async function () {
@@ -1389,7 +1391,7 @@ describe("CrashGamePvP", function () {
       await escrow.connect(owner).setApprovalVersion(2);
       await expect(
         escrow.connect(player1)["createMatch(address,uint256,bytes)"](ethers.ZeroAddress, d1, s1, { value: wager })
-      ).to.be.revertedWith("Bet not approved");
+      ).to.be.revertedWithCustomError(escrow, "BetNotApproved");
 
       const { sig: s2, deadline: d2 } = await signApprovalForVersion(player1.address, wager, 2n);
       await expect(

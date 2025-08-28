@@ -102,8 +102,9 @@ PvP escrow for matched bets between two players. Reduces transactions by combini
 - `mapping(address => uint256) activeMatchOf`: One active match per player (0 = none)
 - `mapping(address => uint256) userBalance`: Aggregated pull‑payment credits (winnings/refunds)
 - `mapping(address => uint256) referralBalances`: Pull‑payment credits for referrers
-- `mapping(address => uint256) feeClaimable`: Accrued platform fees (owner)
-- `uint256 feePercent`: Current fee percentage (capped by `MAX_FEE_PERCENT = 10`)
+ - `mapping(address => uint256) feeClaimable`: Accrued platform fees (owner)
+ - `uint16 feeBp`: Platform fee in basis points (0–1000 bps = 0–10%)
+ - `uint256 feePercent`: Legacy whole‑percent fee (soft‑deprecated; kept for compatibility)
 - `uint16 referralFeeBp`: Referral fee in basis points (default 50 = 0.5%)
 - `uint16 mergeToleranceBp`: Allowed wager mismatch for merging awaiting matches (default 0; max 5%)
 - `uint256 approvalVersion`: Version to invalidate prior EIP‑712 bet approvals
@@ -116,6 +117,7 @@ PvP escrow for matched bets between two players. Reduces transactions by combini
 - `MatchCanceled(uint256 matchId, address playerA, address playerB)`
 - `BalanceCredited(address user, uint256 amount, uint256 matchId)`
 - `BalanceWithdrawn(address user, uint256 amount)`
+- `FeeBpUpdated(uint16 oldFeeBp, uint16 newFeeBp)`
 - `FeePercentUpdated(uint256 oldFee, uint256 newFee)`
 - `FeeWithdrawn(address to, uint256 amount)`
 - `OracleUpdated(address oldOracle, address newOracle)`
@@ -131,7 +133,7 @@ Creation and joining
   - Requires a valid oracle EIP‑712 approval for the exact `msg.value`
     - Domain: `EIP712("CrashGamePvP","1")`
     - Typehash: `BetApproval(address player,uint256 version,uint256 amount,uint256 deadline)`
-  - Snapshots `feePercent` and `referralFeeBp` into the match; sets sticky `referrer`
+  - Snapshots `feeBpAtCreate` and `referralFeeAtCreate`; sets sticky `referrer`
 
 - `joinMatch(uint256 matchId, address expectedOpponent, uint256 expectedWager, address referrer, uint256 deadline, bytes sig) external payable`
   - Requires `matches[matchId].status == AwaitingOpponent`
@@ -143,12 +145,13 @@ Creation and joining
 Merging
 - `mergeAwaitingMatches(uint256 sourceId, uint256 targetId) external onlyOracle`
   - Pairs two `AwaitingOpponent` matches into one `Active` match
-  - Allows small wager drift up to `mergeToleranceBp`; credits any overage back to players’ `userBalance`
+  - Allows small wager drift up to `mergeToleranceBp`; equalizes both wagers to the minimum and credits overage back to players’ `userBalance`
+  - Requires `feeBpAtCreate` and `referralFeeAtCreate` snapshots to match; updates source player's active pointer to target
 
 Settlement and cancellation
 - `settleMatch(uint256 matchId, address winner) external onlyOracle`
   - Draw (`winner == address(0)`): marks Refunded; clears both active slots; credits both players their full wager; no fee charged
-  - Winner path: charges `fee = totalDeposit * feeAtCreate / 100`, allocates referral rewards from the fee (never from player pot), credits `userBalance[winner]` with net pot, accrues remaining fee into `feeClaimable[owner]`
+  - Winner path: charges `fee = totalDeposit * feeBpAtCreate / 10_000`, allocates referral rewards from the fee (never from player pot), credits `userBalance[winner]` with net pot, accrues remaining fee into `feeClaimable[owner]`
 
 - `cancelMyMatch(uint256 matchId) external`
   - Only Player A; only while `AwaitingOpponent`
@@ -158,10 +161,11 @@ Settlement and cancellation
   - Only `AwaitingOpponent`; credits Player A’s deposit to `userBalance[playerA]`
 
 Withdrawals and admin
-- `withdraw()` — player withdraws their entire aggregated balance (`userBalance[msg.sender]` is set to 0)
-- `withdrawReferralBalance()` — referrers withdraw accumulated referral rewards
-- `withdrawFees(address to) onlyOwner` — owner withdraws accumulated fees
-- `setFeePercent(uint256 newFeePercent) onlyOwner` — max 10%
+ - `withdraw()` — player withdraws their entire aggregated balance (`userBalance[msg.sender]` is set to 0)
+ - `withdrawReferralBalance()` — referrers withdraw accumulated referral rewards
+ - `withdrawFees(address to) onlyOwner` — owner withdraws accumulated fees
+ - `setFeeBp(uint16 newFeeBp) onlyOwner` — max 1000 bps (10%); preferred
+ - `setFeePercent(uint256 newFeePercent) onlyOwner` — legacy; also syncs `feeBp = newFeePercent * 100`
 - `setOracle(address newOracle) onlyOwner`
 - `setApprovalVersion(uint256 newVersion) onlyOwner` — invalidate older bet approvals
 - `setMergeToleranceBp(uint16 newBp) onlyOwner` — max 500 (5%)
