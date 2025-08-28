@@ -68,7 +68,7 @@ A provably fair crash gambling game where players deposit ETH and attempt to cas
 ### Security Considerations
 
 1. **EIP-712 Signatures**: Oracle signs typed data for claim verification
-2. **Reentrancy Guard**: All payment functions use nonReentrant modifier
+2. **CEI + Pull-Payments**: Follows Checks–Effects–Interactions; state is updated before transfers. No reentrancy guard is used. Referral/winnings fall back to pull-payments on push failure.
 3. **Pausable**: Owner can pause deposits and claims in emergency
 4. **Bankroll Protection**: Ensures contract has funds for all liabilities
 5. **Pull Payment Fallback**: Referral fees use pull pattern if push fails
