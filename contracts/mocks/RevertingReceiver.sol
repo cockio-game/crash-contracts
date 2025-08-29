@@ -117,4 +117,13 @@ contract RevertingReceiver {
         
         require(success, "Withdraw failed");
     }
+
+    // Helper to withdraw referral balance from CrashSteps
+    function withdrawReferralFromSteps(address steps) external {
+        bool previousAcceptETH = acceptETH;
+        acceptETH = true;
+        (bool success, ) = steps.call(abi.encodeWithSignature("withdrawReferralBalance()"));
+        acceptETH = previousAcceptETH;
+        require(success, "Withdraw referral failed");
+    }
 }

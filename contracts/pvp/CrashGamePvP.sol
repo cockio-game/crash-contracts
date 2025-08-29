@@ -153,7 +153,7 @@ contract CrashGamePvP is EIP712 {
         feeBp = 0;
         feePercent = 0;
         referralFeeBp = 50; // 0.5%
-        mergeToleranceBp = 0;
+        mergeToleranceBp = 100; // 1%
     }
 
     /**
@@ -625,7 +625,7 @@ contract CrashGamePvP is EIP712 {
         address referrer,
         uint256 /* amount */
     ) internal {
-        // Set sticky referrer if not set and valid; subsequent referrer params are ignored
+        // Set sticky referrer if not set and valid; conflicting nonzero later referrers are ignored
         if (referrerOf[player] == address(0) && referrer != address(0) && referrer != player) {
             referrerOf[player] = referrer;
         }

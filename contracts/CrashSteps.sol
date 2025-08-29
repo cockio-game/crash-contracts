@@ -7,12 +7,11 @@ pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
-contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
+contract CrashSteps is EIP712, Ownable, Pausable {
     using Address for address payable;
 
     /*//////////////////////////////////////////////////////////////
@@ -26,14 +25,15 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
                                 CONFIG
     //////////////////////////////////////////////////////////////*/
 
-    uint16 public platformFeeBp         = 500;                  // default 5% fee
-    uint16 public referralFeeBp         = 50;                   // default 0.5%
+    // These are initialized in the constructor for clarity that they may change post-deploy
+    uint16 public platformFeeBp;
+    uint16 public referralFeeBp;
 
-    uint256 public minDeposit           = 0.001 ether;          // 0.001 ETH
-    uint256 public maxDeposit           = 0.125 ether;          // 0.125 ETH
+    uint256 public minDeposit;
+    uint256 public maxDeposit;
 
-    uint32 public riskBurstBp           = 1_273_000;             // 127.3 x 10 000
-    uint32 public maxPayoutFactorBp     = 22_0000;              /// 22x
+    uint32 public riskBurstBp;
+    uint32 public maxPayoutFactorBp;
 
     /// @dev Oracle signs claims
     address public oracle;
@@ -42,6 +42,12 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
                                STORAGE
     //////////////////////////////////////////////////////////////*/
 
+    // Liability accounting
+    // - capLiability tracks outstanding payout caps for active tickets
+    // - referralLiability tracks unpaid referral balances (credited on failed payouts)
+    // - totalLiability mirrors the sum for external consumers and withdraw logic
+    uint256 public capLiability;
+    uint256 public referralLiability;
     uint256 public totalLiability;
     mapping(address => uint256) public nonce;
     mapping(address => mapping(uint256 => uint256)) public netStakes;
@@ -63,6 +69,7 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
     event RiskBurstFactorChanged(uint32 oldBp, uint32 newBp);
     event ReferralFeeChanged(uint16 oldBp, uint16 newBp);
     event ReferralPaid(address indexed referrer, address indexed player, uint256 amount);
+    event OracleRotated(address indexed oldOracle, address indexed newOracle);
 
     /*//////////////////////////////////////////////////////////////
                                  ERRORS
@@ -77,6 +84,9 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
     error DepositTooLarge();
     error OutstandingTicket();
     error TooEarly();
+    error NoBalanceToWithdraw();
+    error ExceedsSurplus();
+    error NoSurplus();
 
     /*//////////////////////////////////////////////////////////////
                                CONSTRUCTOR
@@ -84,6 +94,12 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
 
     constructor(address _oracle) EIP712("CrashReceipt", "2") Ownable(msg.sender) {
         oracle = _oracle;
+        platformFeeBp     = 500;            // 5%
+        referralFeeBp     = 50;             // 0.5%
+        minDeposit        = 0.001 ether;    // 0.001 ETH
+        maxDeposit        = 0.125 ether;    // 0.125 ETH
+        riskBurstBp       = 1_273_000;      // 127.3 x 10 000
+        maxPayoutFactorBp = 22_0000;        // 22x
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -92,8 +108,12 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
 
     /**
      * @notice Start a round by sending ETH.
+     * @dev Referral fees are paid by the house (from contract liquidity) and do not reduce
+     *      a player's betting cap or limits. This effectively reduces the house edge by the
+     *      referral fee when active. Referrer is sticky on first set; passing a different nonzero
+     *      referrer later is ignored (conflicting referrers do not revert).
      */
-    function deposit(address referrer) external payable whenNotPaused nonReentrant {
+    function deposit(address referrer) external payable whenNotPaused {
         uint256 stake = msg.value;
 
         if (stake < minDeposit) revert DepositTooSmall();
@@ -115,21 +135,24 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
 
         netStakes[msg.sender][n] = netStake;
         depositedAt[msg.sender][n] = block.timestamp;
-        totalLiability += cap;
-        nonce[msg.sender] = n + 1;
+        unchecked { capLiability += cap; }
+        unchecked { totalLiability += cap; }
+        unchecked { nonce[msg.sender] = n + 1; }
 
         emit Deposited(msg.sender, netStake, n, cap);
 
         address ref = referrerOf[msg.sender];
-        if (ref != address(0)) {
+        if (ref != address(0) && referralFeeBp > 0) {
             uint256 referralCut = (stake * referralFeeBp) / BP_DENOM;
-            referralEarned[ref] += referralCut;
+            unchecked { referralEarned[ref] += referralCut; }
             (bool success, ) = payable(ref).call{value: referralCut}("");
 
             if (success) {
                 emit ReferralPaid(ref, msg.sender, referralCut);
             } else {
-                referralBalances[ref] += referralCut;
+                unchecked { referralBalances[ref] += referralCut; }
+                unchecked { referralLiability += referralCut; }
+                unchecked { totalLiability += referralCut; }
             }
         }
     }
@@ -144,7 +167,7 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
         uint256 n,
         uint256 reward,
         bytes   calldata sig
-    ) external nonReentrant whenNotPaused {
+    ) external whenNotPaused {
         uint256 netStake = netStakes[msg.sender][n];
         if (netStake == 0) revert AlreadyClaimed();
 
@@ -164,7 +187,8 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
 
         delete netStakes[msg.sender][n];
         delete depositedAt[msg.sender][n];
-        totalLiability -= cap;
+        unchecked { capLiability -= cap; }
+        unchecked { totalLiability -= cap; }
 
         if (address(this).balance < reward) revert InsufficientBankroll();
 
@@ -173,7 +197,12 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
         emit Claimed(msg.sender, n, reward);
     }
 
-    function forfeit(address player, uint256 n) external nonReentrant whenNotPaused {
+    /**
+     * @notice Finalize a losing ticket, releasing its reserved liability.
+     * @dev Oracle may invoke without waiting for FORFEIT_DELAY. This is an explicit privilege
+     *      and represents a trust assumption in the oracle; non-oracle third parties must wait.
+     */
+    function forfeit(address player, uint256 n) external whenNotPaused {
         uint256 netStake = netStakes[player][n];
         if (netStake == 0) revert AlreadyClaimed();
 
@@ -187,18 +216,21 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
         uint256 cap = calculateCap(netStake);
         delete netStakes[player][n];
         delete depositedAt[player][n];
-        totalLiability -= cap;
+        unchecked { capLiability -= cap; }
+        unchecked { totalLiability -= cap; }
         emit Forfeited(player, n, msg.sender);
     }
 
     /**
      * @notice Allows a referrer to withdraw their accumulated referral balance.
      */
-    function withdrawReferralBalance() external nonReentrant {
+    function withdrawReferralBalance() external {
         uint256 amount = referralBalances[msg.sender];
-        require(amount > 0, "No balance to withdraw");
+        if (amount == 0) revert NoBalanceToWithdraw();
 
         referralBalances[msg.sender] = 0;
+        unchecked { referralLiability -= amount; }
+        unchecked { totalLiability -= amount; }
         payable(msg.sender).sendValue(amount);
     }
 
@@ -217,12 +249,31 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
 
     function rotateOracle(address newOracle) external onlyOwner {
         if (newOracle == address(0)) revert InvalidParam();
+        address old = oracle;
         oracle = newOracle;
+        emit OracleRotated(old, newOracle);
     }
 
     function setMaxPayoutFactorBp(uint32 newFactorBp) external onlyOwner {
         if (newFactorBp < BP_DENOM || newFactorBp > 1_500_000) revert InvalidParam(); // 1×–150×
         uint32 old = maxPayoutFactorBp;
+        if (newFactorBp == old) return;
+
+        // Scale existing cap liability proportionally to keep accounting consistent
+        // newCap = capLiability * new / old
+        if (capLiability > 0) {
+            uint256 newCap = (capLiability * uint256(newFactorBp)) / uint256(old);
+            // Update totalLiability by the delta on the cap portion only
+            if (newCap > capLiability) {
+                uint256 inc = newCap - capLiability;
+                unchecked { totalLiability += inc; }
+            } else if (capLiability > newCap) {
+                uint256 dec = capLiability - newCap;
+                unchecked { totalLiability -= dec; }
+            }
+            capLiability = newCap;
+        }
+
         maxPayoutFactorBp = newFactorBp;
         emit MaxPayoutFactorChanged(old, newFactorBp);
     }
@@ -240,15 +291,15 @@ contract CrashSteps is EIP712, Ownable, Pausable, ReentrancyGuard {
         return bal > totalLiability ? bal - totalLiability : 0;
     }
 
-    function withdraw(uint256 amount) external onlyOwner nonReentrant {
+    function withdraw(uint256 amount) external onlyOwner {
         if (amount == 0) revert InvalidParam();
-        require(amount <= _surplus(), "Exceeds surplus");
+        if (amount > _surplus()) revert ExceedsSurplus();
         payable(msg.sender).sendValue(amount);
     }
 
-    function withdrawAll() external onlyOwner nonReentrant {
+    function withdrawAll() external onlyOwner {
         uint256 surplus = _surplus();
-        require(surplus > 0, "No surplus");
+        if (surplus == 0) revert NoSurplus();
         payable(msg.sender).sendValue(surplus);
     }
 
