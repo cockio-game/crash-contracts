@@ -153,7 +153,7 @@ contract CrashGamePvP is EIP712 {
         feeBp = 0;
         feePercent = 0;
         referralFeeBp = 50; // 0.5%
-        mergeToleranceBp = 0;
+        mergeToleranceBp = 100; // 1%
     }
 
     /**
