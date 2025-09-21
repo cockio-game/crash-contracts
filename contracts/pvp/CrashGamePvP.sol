@@ -145,9 +145,9 @@ contract CrashGamePvP is EIP712 {
         _;
     }
 
-    constructor(address _oracleAddress) EIP712("CrashGamePvP", "1") {
+    constructor(address _oracleAddress, address _owner) EIP712("CrashGamePvP", "1") {
         if (_oracleAddress == address(0)) revert InvalidOracle();
-        owner = msg.sender;
+        owner = _owner;
         oracleAddress = _oracleAddress;
         approvalVersion = 1;
         feeBp = 0;

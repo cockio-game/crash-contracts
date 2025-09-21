@@ -30,7 +30,7 @@ const config: HardhatUserConfig = {
       zksync: true,
       chainId: 11124,
     },
-    abstractMainnet: {
+    mainnet: {
       url: "https://api.mainnet.abs.xyz",
       ethNetwork: "mainnet",
       zksync: true,
@@ -38,9 +38,12 @@ const config: HardhatUserConfig = {
     },
   },
   etherscan: {
-    apiKey: {
-      abstractTestnet: "TACK2D1RGYX9U7MC31SZWWQ7FCWRYQ96AD",
-    },
+    // apiKey: "Q7VEE9P3WYCFV24QZ55R9UYCWQ56EKAKGR",
+    apiKey: "TACK2D1RGYX9U7MC31SZWWQ7FCWRYQ96AD",
+    // {
+    //   // abstractTestnet: "TACK2D1RGYX9U7MC31SZWWQ7FCWRYQ96AD",
+    //   "abstractMainnet": "Q7VEE9P3WYCFV24QZ55R9UYCWQ56EKAKGR",
+    // },
     customChains: [
       {
         network: "abstractTestnet",
@@ -51,10 +54,10 @@ const config: HardhatUserConfig = {
         },
       },
       {
-        network: "abstractMainnet",
+        network: "mainnet",
         chainId: 2741,
         urls: {
-          apiURL: "https://api.abscan.org/api",
+          apiURL: "https://api.etherscan.io/v2/api?chainid=2741",
           browserURL: "https://abscan.org/",
         },
       },

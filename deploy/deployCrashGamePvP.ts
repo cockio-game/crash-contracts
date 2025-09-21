@@ -18,9 +18,13 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     }
     
     // Use ORACLE_ADDR if set, otherwise use deployer address
-    const oracleAddress = process.env.ORACLE_ADDR || process.env.ORACLE_ADDRESS;
+    const oracleAddress = process.env.PVP_ORACLE_ADDR || process.env.ORACLE_ADDR;
     if (!oracleAddress) {
         console.log("⚠️  ORACLE_ADDR not set, using deployer address as oracle for testing");
+    }
+    const ownerAddress = process.env.PVP_OWNER_ADDR || process.env.OWNER_ADDR;
+    if (!ownerAddress) {
+        console.log("⚠️  OWNER_ADDR not set, using deployer address as owner for testing");
     }
 
     // --- 2. Initialize the deployer ---
@@ -30,36 +34,39 @@ export default async function (hre: HardhatRuntimeEnvironment) {
 
     // --- 3. Use oracle address or deployer address ---
     const finalOracleAddress = oracleAddress || wallet.address;
+    const finalOwnerAddress = ownerAddress || wallet.address;
     console.log(`📋 Using oracle address: ${finalOracleAddress}`);
+    console.log(`📋 Using owner address: ${finalOwnerAddress}`);
 
     // --- 4. Load artifact and deploy ---
     const artifact = await deployer.loadArtifact("CrashGamePvP");
-    const args = [finalOracleAddress];
+    const args = [finalOracleAddress, finalOwnerAddress];
     
-    console.log(`\nDeploying ${artifact.contractName} with oracle address: ${finalOracleAddress}...`);
-    const contract = await deployer.deploy(artifact, args);
+    // console.log(`\nDeploying ${artifact.contractName} with oracle address: ${finalOracleAddress}...`);
+    // const contract = await deployer.deploy(artifact, args);
 
-    const contractAddress = await contract.getAddress();
-    console.log(`✅ ${artifact.contractName} deployed to => ${contractAddress}`);
+    // const contractAddress = await contract.getAddress();
+    const contractAddress = "0xabF7281aDcdec774E414AEc90922df3F7CfceDF6";
+    // console.log(`✅ ${artifact.contractName} deployed to => ${contractAddress}`);
 
-    // --- 5. Configure merge tolerance to 1% (100 bps) ---
-    try {
-        const currentTol: bigint = await (contract as any).mergeToleranceBp();
-        if (currentTol !== 100n) {
-            console.log("\n⚙️  Setting mergeToleranceBp to 1% (100 bps)...");
-            const tx = await (contract as any).setMergeToleranceBp(100);
-            await tx.wait();
-            console.log("✅ mergeToleranceBp set to 100 bps");
-        } else {
-            console.log("\nℹ️  mergeToleranceBp already set to 100 bps");
-        }
-    } catch (e) {
-        console.log("\n⚠️  Could not set mergeToleranceBp automatically (continuing). Error:", e);
-    }
+    // // --- 5. Configure merge tolerance to 1% (100 bps) ---
+    // try {
+    //     const currentTol: bigint = await (contract as any).mergeToleranceBp();
+    //     if (currentTol !== 100n) {
+    //         console.log("\n⚙️  Setting mergeToleranceBp to 1% (100 bps)...");
+    //         const tx = await (contract as any).setMergeToleranceBp(100);
+    //         await tx.wait();
+    //         console.log("✅ mergeToleranceBp set to 100 bps");
+    //     } else {
+    //         console.log("\nℹ️  mergeToleranceBp already set to 100 bps");
+    //     }
+    // } catch (e) {
+    //     console.log("\n⚠️  Could not set mergeToleranceBp automatically (continuing). Error:", e);
+    // }
 
-    // --- 6. Wait for block explorer to index the transaction ---
-    console.log("\n⏳ Waiting 15 seconds for block finalization before verification...");
-    await new Promise(r => setTimeout(r, 15_000));
+    // // --- 6. Wait for block explorer to index the transaction ---
+    // console.log("\n⏳ Waiting 15 seconds for block finalization before verification...");
+    // await new Promise(r => setTimeout(r, 15_000));
 
     // --- 7. Verify the contract on the block explorer ---
     console.log("🕵️ Verifying contract on the block explorer...");
