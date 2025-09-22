@@ -42,7 +42,7 @@ contract CrashGamePvP is EIP712 {
     }
 
     // --- State Variables ---
-    address public immutable owner;
+    address public owner;
     address public oracleAddress;
 
     // Approval versioning for bet-size signatures
@@ -100,6 +100,7 @@ contract CrashGamePvP is EIP712 {
     event MergeToleranceChanged(uint16 oldBp, uint16 newBp);
     event ReferralFeeChanged(uint16 oldBp, uint16 newBp);
     event ReferralPaid(address indexed referrer, address indexed player, uint256 amount);
+    event OwnerUpdated(address indexed oldOwner, address indexed newOwner);
     
     // --- Errors ---
     error OnlyOwner();
@@ -133,6 +134,7 @@ contract CrashGamePvP is EIP712 {
     error FeeWithdrawalFailed();
     error Expired();
     error BetNotApproved();
+    error InvalidOwner();
 
     // --- Modifiers ---
     modifier onlyOwner() {
@@ -575,6 +577,19 @@ contract CrashGamePvP is EIP712 {
         address oldOracle = oracleAddress;
         oracleAddress = newOracle;
         emit OracleUpdated(oldOracle, newOracle);
+    }
+
+    /**
+     * @dev Owner sets the owner directly.
+     * Emits OwnerUpdated(oldOwner, newOwner).
+     * @param newOwner Address of the new owner
+     */
+    function setOwner(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert InvalidOwner();
+        if (newOwner == owner) revert NoChange();
+        address oldOwner = owner;
+        owner = newOwner;
+        emit OwnerUpdated(oldOwner, newOwner);
     }
 
     /**

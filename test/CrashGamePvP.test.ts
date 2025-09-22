@@ -16,7 +16,7 @@ describe("CrashGamePvP", function () {
     [owner, oracle, player1, player2, player3] = await ethers.getSigners();
 
     const EscrowFactory = await ethers.getContractFactory("CrashGamePvP");
-    escrow = await EscrowFactory.deploy(oracle.address);
+    escrow = await EscrowFactory.deploy(oracle.address, owner.address);
     await escrow.waitForDeployment();
   });
 

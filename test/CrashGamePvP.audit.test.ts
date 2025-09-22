@@ -11,7 +11,7 @@ describe("CrashGamePvP – audit follow-ups", function () {
   beforeEach(async function () {
     [owner, oracle, p1, p2] = await ethers.getSigners();
     const EscrowFactory = await ethers.getContractFactory("CrashGamePvP");
-    escrow = await EscrowFactory.deploy(oracle.address);
+    escrow = await EscrowFactory.deploy(oracle.address, owner.address);
     await escrow.waitForDeployment();
   });
 

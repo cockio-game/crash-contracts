@@ -30,7 +30,7 @@ const config: HardhatUserConfig = {
       zksync: true,
       chainId: 11124,
     },
-    mainnet: {
+    abstractMainnet: {
       url: "https://api.mainnet.abs.xyz",
       ethNetwork: "mainnet",
       zksync: true,
@@ -62,6 +62,29 @@ const config: HardhatUserConfig = {
         },
       },
     ],
+
+    // apiKey: {
+    //   abstractTestnet: "TACK2D1RGYX9U7MC31SZWWQ7FCWRYQ96AD",
+    //   abstractMainnet: "Q7VEE9P3WYCFV24QZ55R9UYCWQ56EKAKGR",
+    // },
+    // customChains: [
+    //   {
+    //     network: "abstractTestnet",
+    //     chainId: 11124,
+    //     urls: {
+    //       apiURL: "https://api-sepolia.abscan.org/api",
+    //       browserURL: "https://sepolia.abscan.org/",
+    //     },
+    //   },
+    //   {
+    //     network: "abstractMainnet",
+    //     chainId: 2741,
+    //     urls: {
+    //       apiURL: "https://api.abscan.org/api",
+    //       browserURL: "https://abscan.org/",
+    //     },
+    //   },
+    // ],
   },
 };
 export default config;

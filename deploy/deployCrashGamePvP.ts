@@ -42,31 +42,31 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     const artifact = await deployer.loadArtifact("CrashGamePvP");
     const args = [finalOracleAddress, finalOwnerAddress];
     
-    // console.log(`\nDeploying ${artifact.contractName} with oracle address: ${finalOracleAddress}...`);
-    // const contract = await deployer.deploy(artifact, args);
+    console.log(`\nDeploying ${artifact.contractName} with oracle address: ${finalOracleAddress} and owner address: ${finalOwnerAddress}...`);
+    const contract = await deployer.deploy(artifact, args);
 
-    // const contractAddress = await contract.getAddress();
-    const contractAddress = "0xabF7281aDcdec774E414AEc90922df3F7CfceDF6";
-    // console.log(`✅ ${artifact.contractName} deployed to => ${contractAddress}`);
+    const contractAddress = await contract.getAddress();
+    // const contractAddress = "0xabF7281aDcdec774E414AEc90922df3F7CfceDF6";
+    console.log(`✅ ${artifact.contractName} deployed to => ${contractAddress}`);
 
-    // // --- 5. Configure merge tolerance to 1% (100 bps) ---
-    // try {
-    //     const currentTol: bigint = await (contract as any).mergeToleranceBp();
-    //     if (currentTol !== 100n) {
-    //         console.log("\n⚙️  Setting mergeToleranceBp to 1% (100 bps)...");
-    //         const tx = await (contract as any).setMergeToleranceBp(100);
-    //         await tx.wait();
-    //         console.log("✅ mergeToleranceBp set to 100 bps");
-    //     } else {
-    //         console.log("\nℹ️  mergeToleranceBp already set to 100 bps");
-    //     }
-    // } catch (e) {
-    //     console.log("\n⚠️  Could not set mergeToleranceBp automatically (continuing). Error:", e);
-    // }
+    // --- 5. Configure merge tolerance to 1% (100 bps) ---
+    try {
+        const currentTol: bigint = await (contract as any).mergeToleranceBp();
+        if (currentTol !== 100n) {
+            console.log("\n⚙️  Setting mergeToleranceBp to 1% (100 bps)...");
+            const tx = await (contract as any).setMergeToleranceBp(100);
+            await tx.wait();
+            console.log("✅ mergeToleranceBp set to 100 bps");
+        } else {
+            console.log("\nℹ️  mergeToleranceBp already set to 100 bps");
+        }
+    } catch (e) {
+        console.log("\n⚠️  Could not set mergeToleranceBp automatically (continuing). Error:", e);
+    }
 
     // // --- 6. Wait for block explorer to index the transaction ---
-    // console.log("\n⏳ Waiting 15 seconds for block finalization before verification...");
-    // await new Promise(r => setTimeout(r, 15_000));
+    console.log("\n⏳ Waiting 15 seconds for block finalization before verification...");
+    await new Promise(r => setTimeout(r, 15_000));
 
     // --- 7. Verify the contract on the block explorer ---
     console.log("🕵️ Verifying contract on the block explorer...");
@@ -88,4 +88,6 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     console.log(`   NEXT_PUBLIC_CRASH_PVP_CONTRACT=${contractAddress}`);
     console.log(`2. Run: npx prisma migrate dev --name add_match_id_to_queue`);
     console.log(`3. Restart your development server`);
+
+    // 0xE4a225044E3275C5F63C155f8cc5321705Dd4bd6
 }
